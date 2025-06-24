@@ -1,0 +1,7 @@
+pdfplumber
+jieba
+sentence-transformers
+qdrant-client
+ollama
+python-dotenv
+pandas
