@@ -1,7 +1,7 @@
-from pdf_parser import parse_pdf
-from chunker import chunk_text
-from embedder import embed
-from indexer import index_chunks
+from .pdf_parser import parse_pdf
+from .chunker import chunk_text
+from .embedder import embed
+from .indexer import index_chunks
 
 def ingest(path):
     text = parse_pdf(path)

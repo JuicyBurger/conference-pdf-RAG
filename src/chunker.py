@@ -3,7 +3,7 @@
 import re
 import jieba
 from typing import List, Tuple
-from config import CHUNK_MAX_CHARS, CHUNK_OVERLAP
+from .config import CHUNK_MAX_CHARS, CHUNK_OVERLAP
 
 # Chinese sentence boundary regex (period, question, exclamation, semicolon, ellipsis)
 ZH_BOUNDARY = re.compile(r'(?<=[。！？；…])')

@@ -1,14 +1,18 @@
 # src/indexer.py
 
-import os
-import uuid
+# stdlib
+import os, sys, glob, uuid
 from typing import List
+
+# third-party
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import VectorParams, Distance
-from config import QDRANT_URL, QDRANT_API_KEY
-from embedder import model, embed
-from pdf_parser import parse_pdf
-from chunker import chunk_text
+
+# local
+from .config        import QDRANT_URL, QDRANT_API_KEY
+from .embedder      import model, embed
+from .pdf_ingestor  import extract_text_pages
+from .chunker       import chunk_text
 
 # ─── Setup Qdrant client ────────────────────────────────────────────────────────
 client = QdrantClient(
@@ -30,40 +34,52 @@ def init_collection(collection_name: str = "docs") -> None:
         ),
     )
     print(f"✅ Collection '{collection_name}' initialized: vectors={vector_size}, distance=Cosine")
+    
+    client.create_payload_index(
+        collection_name=collection_name,
+        field_name="doc_id",
+        # keyword is the right type for exact matches on strings
+        field_schema="keyword",
+    )
+    print(f"🔑 Payload index created on field 'doc_id'")
 
 
 def index_pdf(pdf_path: str, collection_name: str = "docs") -> int:
     """
-    Parse → chunk → embed → upsert a single PDF.
-    Returns the number of chunks indexed.
+    1) Extract pages (with page numbers)
+    2) Chunk each page
+    3) Embed & upsert, including 'page' in payload
     """
-    # 1. Parse PDF to raw text
-    full_text = parse_pdf(pdf_path)
-
-    # 2. Chunk text into (lang, chunk_str) tuples
-    chunks = chunk_text(full_text)
-    print(f"🔍 Parsed into {len(chunks)} chunks")
-    # 3. Build upsert payload
-    doc_id = os.path.splitext(os.path.basename(pdf_path))[0]
+    pages = extract_text_pages(pdf_path)  # [{"page":1,"text":...}, ...]
     points = []
-    for idx, (lang, chunk_str) in enumerate(chunks):
-        vec = embed(chunk_str)
-        payload = {
-            "doc_id": doc_id,
-            "lang": lang,
-            "text": chunk_str,
-        }
-        # valid UUID for Qdrant
-        point_id = str(uuid.uuid4())
-        points.append({
-            "id": point_id,
-            "vector": vec,
-            "payload": payload,
-        })
+    doc_id = os.path.splitext(os.path.basename(pdf_path))[0]
 
-    # 4. Upsert into Qdrant
-    client.upsert(collection_name=collection_name, points=points)
-    print(f"🔹 Indexed {len(points)} chunks from '{pdf_path}'")
+    for page in pages:
+        page_no = page["page"]
+        page_text = page["text"]
+        
+        chunks = chunk_text(page_text)
+        
+        for chunk_idx, (lang, text) in enumerate(chunks):
+            vec = embed(text)
+            payload = {
+                "doc_id": doc_id,
+                "page":   page_no,
+                "lang":   lang,
+                "text":   text,
+            }
+            points.append({
+                "id":      str(uuid.uuid4()),
+                "vector":  vec,
+                "payload": payload,
+            })
+
+    BATCH_SIZE = 500
+    for i in range(0, len(points), BATCH_SIZE):
+        batch = points[i : i + BATCH_SIZE]
+        client.upsert(collection_name=collection_name, points=batch)
+        print(f"🔹 Indexed {len(points)} chunks from '{pdf_path}'")
+    
     return len(points)
 
 
@@ -80,18 +96,30 @@ def index_pdfs(
 
     total = 0
     for path in pdf_paths:
-        total += index_pdf(path, collection_name=collection_name)
-
+        try:
+            total += index_pdf(path, collection_name=collection_name)
+        except Exception as e:
+            print(f"❌ Failed to index {path}: {e}")
+        
     print(f"🎉 Done! Total chunks indexed: {total}")
 
 
-# ─── CLI entrypoint ────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    import sys
+    args = sys.argv[1:]
+    recreate = "--no-recreate" not in args
+    # Remove the flag from the list
+    args = [a for a in args if a != "--no-recreate"]
 
-    if len(sys.argv) < 2:
-        print("Usage: python indexer.py <pdf1> [pdf2 ...]")
+    # Expand any globs into real file paths
+    pdfs = []
+    for a in args:
+        if any(ch in a for ch in "*?[]"):
+            pdfs.extend(glob.glob(a))
+        else:
+            pdfs.append(a)
+
+    if not pdfs:
+        print("Usage: python indexer.py [--no-recreate] <pdf1> [pdf2 ...]")
         sys.exit(1)
 
-    pdf_files = sys.argv[1:]
-    index_pdfs(pdf_files, recreate=True)
+    index_pdfs(pdfs, recreate=recreate)

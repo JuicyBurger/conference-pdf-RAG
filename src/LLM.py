@@ -17,23 +17,36 @@ class Result(BaseModel):
   response: str
 
 # Get response from LLM
-def LLM(client: Client, model: str, system_prompt: str, user_prompt: str):
+def LLM(client: Client, model: str, system_prompt: str, user_prompt: str) -> str:
     messages = [
-        {'role': 'system', 'content': system_prompt},
-        {'role': 'user', 'content': user_prompt}
+        {"role": "system", "content": system_prompt},
+        {"role": "user",   "content": user_prompt}
     ]
-    response = client.chat(
-        model=model,
-        messages=messages,
-        options={
-            "seed": 42,
-            "temperature": 0,
-        },
-        format=Result.model_json_schema(),
-    )
 
-    response_content = response['message']['content']
-    return response_content
+    # 1) Debug: print model, lengths
+    print(f">>> LLM call starting (model={model})")
+    print(f"    system_prompt length: {len(system_prompt)} chars")
+    print(f"      user_prompt length: {len(user_prompt)} chars")
+
+    start = time.time()
+    try:
+        response = client.chat(
+            model=model,
+            messages=messages,
+            options={"seed": 42, "temperature": 0},
+            format=Result.model_json_schema(),
+        )
+    except Exception as e:
+        duration = time.time() - start
+        print(f"!!! LLM call ERROR after {duration:.1f}s: {e}")
+        traceback.print_exc()
+        raise
+    else:
+        duration = time.time() - start
+        print(f"<<< LLM call completed in {duration:.1f}s")
+
+    content = response["message"]["content"]
+    return content
 
 # Extract JSON from response
 def extract_json(response: str):
