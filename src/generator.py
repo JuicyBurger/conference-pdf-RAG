@@ -1,6 +1,11 @@
 # src/generator.py
 
+import ast
+import re
 import json
+import uuid
+import demjson3
+from fuzzy_json import loads
 
 from ollama import Client
 from qdrant_client import QdrantClient
@@ -13,7 +18,6 @@ from .LLM import LLM
 # Initialize clients
 ollama = Client(host=OLLAMA_HOST)
 qdrant = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
-
 
 def generate_answer(query: str, hits, lang: str = "zh") -> str:
     """
@@ -66,81 +70,136 @@ def fetch_doc_chunks(doc_id: str, limit: int = 1000):
 def generate_qa_pairs_for_doc(
     doc_id: str,
     num_pairs: int = 5,
-    lang: str = "zh"
-) -> list:
+    lang: str = "zh",
+    timeout: float = 30.0,
+    context_top_k: int = 20
+) -> list[dict]:
     """
-    For a single document (by doc_id), fetch its chunks, and prompt the LLM
-    to produce num_pairs investor-focused Q&A pairs in a JSON array:
-    each with id, question, answer, and source.
+    1) Fetch all chunks for this doc_id
+    2) Retrieve + rerank the top `context_top_k` most relevant chunks, using
+       a *fixed* text query like "Generate investor questions"
+       (or you could pick a better descriptor).
+    3) Build context from those top_k
+    4) Prompt LLM with timeout
     """
-    points = fetch_doc_chunks(doc_id)
+    
+    print(f"Number of pairs that will be generated: {num_pairs}")
+    
+    # 1) Fetch every chunk for this PDF
+    records = fetch_doc_chunks(doc_id)
+    if not records:
+        return []
 
+    # 2) From those records, retrieve the top-k for the *question generation task*
+    text_query = "Generate investor-style questions from this content"
+    # embed & search that query against the collection; limit= context_top_k
+    hits = retrieve(text_query, top_k=context_top_k)
+    hits = rerank(text_query, hits)
+    
+    
     if lang == "zh":
         context = "\n\n".join(
-            f"[第{p.payload['page']}頁] {p.payload['text']}" for p in points
+            f"[第{h.payload['page']}頁] {h.payload['text']}"
+            for h in hits
         )
-        system_prompt = """你是投資人簡報助理。  
-        以下是公司簡報的內容，請以熱情、吸引投資的語氣，根據上下文產出 {num_pairs} 組問答（Question & Answer）。  
-        每組必須是一個 JSON 物件，包含以下欄位：  
-        - id：唯一識別碼（UUID 或整數皆可），  
-        - question：投資人會問的問題，  
-        - answer：簡潔、具說服力的回答，  
-        - source：出處頁碼，格式「第X頁」。  
+        system_prompt = f"""
+        你是投資人簡報助理。
+        以下提供公司簡報內容，請以熱情、吸引投資的語氣，根據上下文恰好產出 {num_pairs} 組不重複的問答，
+        並以第一人稱（我們／本公司）作答，答案不超過兩句，結尾帶投資亮點。
 
-        **請僅回傳一個純 JSON 陣列**，不要包含任何額外文字或 Markdown。  
-        格式範例：  
+        嚴格要求：
+        1. 僅回傳純 JSON 陣列，停在最後一個 ] 後立即停止，不可包含任何額外文字、XML、HTML、Markdown 或程式碼區塊。
+        2. 每個物件都要有：
+        - question
+        - answer
+        - source：單頁用 "第X頁"，多頁用 ["第X頁","第Y頁"]
+        3. 請勿使用 XML 或任何其他非 JSON 語法。
+        4. **生成後，請重新檢查並確保輸出為完全正確且格式良好的 JSON 結構**，再返回結果。
+
+        範例（僅供格式參考，請勿複製）：
         ```json
         [
-        {
-            "id": "a1b2c3d4",
+        {{
             "question": "2023 年的稅後淨利是多少？",
-            "answer": "2023 年公司稅後淨利為新台幣 10.6 億元，展現穩健成長，值得關注。",
-            "source": "第18頁"
-        },
-        …
+            "answer": "2023 年公司稅後淨利為新台幣 10.6 億元，展現穩健成長，值得長期投資。",
+            "source": ["第18頁"]
+        }}
         ]
-        
-        「只回傳 JSON，並在最後一個右中括號後立刻停止。」
         """
-        user_prompt = f"內容：\n{context}\n\n請開始產出 Q&A："
+        user_prompt = f"內容：\n{context}\n\n請直接輸出上述格式的 JSON 陣列。"
     else:
         context = "\n\n".join(
-            f"[p{p.payload['page']}] {p.payload['text']}" for p in points
+            f"[p{h.payload['page']}] {h.payload['text']}"
+            for h in hits
         )
-        system_prompt = """
-        You are an investor-briefing assistant.  
-        Below is the presentation content. In a promotional, pitch-to-invest tone, generate {num_pairs} investor-style Q&A pairs.  
-        Return a single **JSON array** (no extra text or markdown), where each item has the keys:  
-        - id: unique identifier (UUID or integer),  
-        - question: a question an investor might ask,  
-        - answer: a concise, compelling answer,  
-        - source: the page number in format “pX”.  
+        system_prompt = f"""
+        You are an investor-briefing assistant.
+        Below is a tightly-focused excerpt of the presentation. 
+        In a promotional, pitch-to-invest tone, generate exactly {num_pairs} unique investor-style Q&A pairs:
+        all answers in first-person (we/our company), max two sentences ending with an investment highlight.
 
-        Example output:  
-        json
+        Strict requirements:
+        1. Return **only** a pure JSON array; stop right after the closing bracket.
+        2. Each object must have:
+        - question
+        - answer
+        - source: "pX" or ["pX","pY"]
+        3. **Do not** use XML, HTML tags, Markdown, or code fences—JSON only.
+        4. **Escape rules**:  
+        - Any double-quote inside a question or answer must be escaped as `\"`.  
+        - Any literal newline must be escaped as `\n`.
+        5. **After generation, revalidate and ensure the JSON structure is perfectly well-formed** before returning.
+
+        Example:
+        ```json
         [
-        {
-            "id": "1",
-            "question": "What was the net profit after tax in 2023?",
-            "answer": "In 2023, the company achieved an after-tax net profit of NT$10.6 billion, demonstrating solid financial performance.",
-            "source": "p18"
-        },
-        …
+        {{
+            "question": "What was the company's \"governance\" achievement?",
+            "answer": "We have been included in the Taiwan Index Company's \"Corporate Governance 100 Index\", demonstrating leadership.\nThis makes us a strong investment.",
+            "source": ["p4"]
+        }}
         ]
-        
-        Only return the JSON array and stop immediately after the closing bracket.
         """
-        user_prompt = f"Context:\n{context}\n\Generate Q&A pairs from the context. Response in JSON object with `id`, `question`, `answer`, `source`"
+        user_prompt = f"Context:\n{context}\n\nPlease output the JSON array now."
 
-    raw = LLM(ollama, OLLAMA_MODEL, system_prompt, user_prompt)
+    # 3) Call LLM with timeout
+    raw = LLM(ollama, OLLAMA_MODEL, system_prompt, user_prompt, options={"temperature":0.4}, timeout=timeout, raw=True)
+    
+    print("LLM raw QA output:", raw["response"])
+    
+    # 4) Parse any broken JSON
+    qa_list = loads(raw["response"])
+    
+    # enforce exact count
+    if len(qa_list) != num_pairs:
+        print(f"⚠️ Expected {num_pairs} items but got {len(qa_list)}")
 
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        snippet = raw.strip().split("\n")[-1]
-        data = json.loads(snippet)
+    # 6) Ensure UUIDs
+    for item in qa_list:
+        if "id" not in item:
+            item["id"] = str(uuid.uuid4())
 
-    # for item in data:
-    #     item.setdefault("id", str(uuid.uuid4()))
+    return qa_list
 
-    return data
+def sanitize_json_via_llm(raw: str, client: Client, model: str, timeout: float = 15) -> str:
+    """
+    Ask the LLM to repair and re‐emit a valid JSON array.
+    """
+    system = (
+        "You are a JSON validator and reformatter. "
+        "The user will give you a string that is _almost_ a valid JSON array. "
+        "Your job is to output **only** a well-formed JSON array—nothing else."
+    )
+    user = f"Here is the raw JSON to fix:\n\n{raw}\n\nPlease output a corrected JSON array."
+    
+    # Call your LLM wrapper in raw mode (no Pydantic schema)
+    fixed = LLM(
+        client=client,
+        model=model,
+        system_prompt=system,
+        user_prompt=user,
+        options={"temperature": 0},  # deterministic cleanup
+        timeout=timeout,
+        raw=True
+    )
+    return fixed.strip()

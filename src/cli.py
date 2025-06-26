@@ -4,39 +4,12 @@ import os
 import json
 import uuid
 
+
 from .pdf_ingestor import ingest_pdf
-from .chunker      import chunk_text
-from .embedder     import embed
 from .indexer      import init_collection, index_pdf
 from .retriever    import retrieve
 from .reranker     import rerank
 from .generator    import generate_answer, generate_qa_pairs_for_doc
-
-def safe_json_loads(raw: str):
-    """
-    1) Extract the first […] substring
-    2) Try json.loads
-    3) If that fails, fall back to ast.literal_eval
-    """
-    # 1) find the JSON array
-    start = raw.find('[')
-    end   = raw.rfind(']')
-    if start != -1 and end != -1:
-        fragment = raw[start:end+1]
-    else:
-        fragment = raw
-
-    # 2) try strict JSON
-    try:
-        return json.loads(fragment)
-    except json.JSONDecodeError:
-        pass
-
-    # 3) fallback to Python literal eval (handles single quotes, trailing commas)
-    try:
-        return ast.literal_eval(fragment)
-    except Exception as e:
-        raise ValueError(f"Could not parse JSON: {e}\nFragment was:\n{fragment}")
 
 
 def cmd_ingest(args):
@@ -58,7 +31,7 @@ def cmd_query(args):
     print(generate_answer(args.question, hits, lang=args.lang))
 
 def cmd_qa_generate(args):
-    pdf_paths = glob.glob(args.pattern)[:2]
+    pdf_paths = glob.glob(args.pattern)
     if not pdf_paths:
         print(f"❌ No PDFs matched pattern: {args.pattern}")
         return
@@ -67,29 +40,27 @@ def cmd_qa_generate(args):
     for path in pdf_paths:
         doc_id = os.path.splitext(os.path.basename(path))[0]
         print(f"🗂  Processing '{doc_id}'…")
+
         try:
-            result = generate_qa_pairs_for_doc(
+            # Directly get a list of QA dicts
+            pairs = generate_qa_pairs_for_doc(
                 doc_id,
                 num_pairs=args.num,
                 lang=args.lang
             )
-
-            raw = result.get("response", "")
-            print("parsing data...")
-            qa_list = safe_json_loads(raw)
-
-            for item in qa_list:
-                if "id" not in item:
-                    item["id"] = str(uuid.uuid4())
-                all_pairs.append(item)
-
-            print(f"[+] Parsed {len(qa_list)} pairs for {doc_id}")
-
         except Exception as e:
             print(f"❌ Failed on {doc_id}: {e}")
             continue
 
-    # write them out
+        # Ensure every item has a unique id
+        for item in pairs:
+            if "id" not in item or not item["id"]:
+                item["id"] = str(uuid.uuid4())
+            all_pairs.append(item)
+
+        print(f"[+] Retrieved {len(pairs)} Q&A pairs for {doc_id}")
+
+    # Write out the combined list
     with open(args.output, "w", encoding="utf-8") as fout:
         json.dump(all_pairs, fout, ensure_ascii=False, indent=2)
     print(f"✨ Wrote {len(all_pairs)} QA pairs to {args.output}")

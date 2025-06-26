@@ -2,6 +2,8 @@
 # Contact: s11327605@gm.cyut.edu.tw/tylau70242@gmail.com
 # Updated_Date: 2025-06-21
 import time
+import traceback
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from ollama import Client
 import pandas as pd
 from pydantic import BaseModel
@@ -17,36 +19,69 @@ class Result(BaseModel):
   response: str
 
 # Get response from LLM
-def LLM(client: Client, model: str, system_prompt: str, user_prompt: str) -> str:
+def LLM(
+    client: Client,
+    model: str,
+    system_prompt: str,
+    user_prompt: str,
+    options: dict = None,
+    timeout: float = None,
+    raw: bool = False
+) -> str:
+    opts = {} if options is None else options.copy()
+    # By default deterministic:
+    if not opts and not raw:
+        opts = {"seed": 42, "temperature": 0}
+    # If raw=True and no opts, we default to creative
+    if raw and not opts:
+        opts = {"temperature": 0.4}
+
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user",   "content": user_prompt}
     ]
 
-    # 1) Debug: print model, lengths
     print(f">>> LLM call starting (model={model})")
-    print(f"    system_prompt length: {len(system_prompt)} chars")
-    print(f"      user_prompt length: {len(user_prompt)} chars")
+    print(f"    system_prompt: {len(system_prompt)} chars")
+    print(f"      user_prompt: {len(user_prompt)} chars")
+    print(f"        options: {opts}")
+    if timeout:
+        print(f"    timeout: {timeout}s")
 
     start = time.time()
     try:
-        response = client.chat(
-            model=model,
-            messages=messages,
-            options={"seed": 42, "temperature": 0},
-            format=Result.model_json_schema(),
-        )
+        if timeout:
+            # run in a thread so we can time out
+            with ThreadPoolExecutor(max_workers=1) as exec:
+                future = exec.submit(
+                    client.chat,
+                    model=model,
+                    messages=messages,
+                    options=opts,
+                    format=Result.model_json_schema()
+                )
+                response = future.result(timeout=timeout)
+        else:
+            response = client.chat(
+                model=model,
+                messages=messages,
+                options=opts,
+                format=Result.model_json_schema()
+            )
+    except FuturesTimeout:
+        raise TimeoutError(f"LLM call timed out after {timeout} seconds")
     except Exception as e:
-        duration = time.time() - start
-        print(f"!!! LLM call ERROR after {duration:.1f}s: {e}")
+        dur = time.time() - start
+        print(f"!!! LLM call ERROR after {dur:.1f}s: {e}")
         traceback.print_exc()
         raise
     else:
-        duration = time.time() - start
-        print(f"<<< LLM call completed in {duration:.1f}s")
+        dur = time.time() - start
+        print(f"<<< LLM call completed in {dur:.1f}s")
 
-    content = response["message"]["content"]
-    return content
+    # Extract the assistant's content
+    print(response["message"]["content"])
+    return extract_json(response["message"]["content"])
 
 # Extract JSON from response
 def extract_json(response: str):
