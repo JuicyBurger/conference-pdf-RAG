@@ -5,11 +5,11 @@ import json
 import uuid
 
 
-from .pdf_ingestor import ingest_pdf
-from .indexer      import init_collection, index_pdf
-from .retriever    import retrieve
-from .reranker     import rerank
-from .generator    import generate_answer, generate_qa_pairs_for_doc
+from .data.pdf_ingestor import ingest_pdf
+from .rag.indexer      import init_collection, index_pdf
+from .rag.retriever    import retrieve
+from .models.reranker  import rerank
+from .rag.generator    import generate_answer, generate_qa_pairs_for_doc
 
 
 def cmd_ingest(args):
@@ -28,7 +28,7 @@ def cmd_index(args):
 def cmd_query(args):
     hits = retrieve(args.question, top_k=args.topk)
     hits = rerank(args.question, hits)
-    print(generate_answer(args.question, hits, lang=args.lang))
+    print(generate_answer(args.question, hits))
 
 def cmd_qa_generate(args):
     pdf_paths = glob.glob(args.pattern)
@@ -45,8 +45,7 @@ def cmd_qa_generate(args):
             # Directly get a list of QA dicts
             pairs = generate_qa_pairs_for_doc(
                 doc_id,
-                num_pairs=args.num,
-                lang=args.lang
+                num_pairs=args.num
             )
         except Exception as e:
             print(f"❌ Failed on {doc_id}: {e}")
@@ -81,18 +80,12 @@ def main():
     q = sub.add_parser("query")
     q.add_argument("question")
     q.add_argument("--topk", type=int, default=5)
-    q.add_argument(
-        "--lang", choices=["zh","en"], default="zh",
-        help="Output language: 'zh' for Traditional Chinese, 'en' for English"
-    )
     q.set_defaults(func=cmd_query)
 
     g = sub.add_parser("qa-generate", help="Generate Q&A pairs from PDFs")
     g.add_argument("pattern", help="glob pattern, e.g. data/raw/*.pdf")
     g.add_argument("-n", "--num", type=int, default=5,
                 help="How many Q&A pairs per document")
-    g.add_argument("-l", "--lang", choices=["zh","en"], default="zh",
-                help="Language for output")
     g.add_argument("-o", "--output", default="qa_pairs.json",
                 help="JSON file to write the results")
     g.set_defaults(func=cmd_qa_generate)

@@ -5,3 +5,9 @@ qdrant-client
 ollama
 python-dotenv
 pandas
+torch
+transformers
+camelot-py[cv]
+rapidfuzz>=3.0.0
+PyMuPDF
+tqdm

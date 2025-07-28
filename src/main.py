@@ -1,13 +1,10 @@
-from .pdf_parser import parse_pdf
-from .chunker import chunk_text
-from .embedder import embed
-from .indexer import index_chunks
+from .rag.indexer import index_pdf
 
 def ingest(path):
-    text = parse_pdf(path)
-    chunks = chunk_text(text, lang="zh")
-    vectors = [embed(c) for c in chunks]
-    index_chunks(chunks, vectors)
+    """Legacy ingest function - now just calls the modern index_pdf"""
+    print(f"📄 Processing {path}...")
+    total_chunks = index_pdf(path)
+    print(f"✅ Indexed {total_chunks} chunks from {path}")
 
 if __name__ == "__main__":
     import sys

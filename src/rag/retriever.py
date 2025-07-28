@@ -1,7 +1,7 @@
 # src/RAG/retriever.py
 from qdrant_client import QdrantClient
-from .config import QDRANT_URL, QDRANT_API_KEY, QDRANT_COLLECTION
-from .embedder import embed
+from ..config import QDRANT_URL, QDRANT_API_KEY, QDRANT_COLLECTION
+from ..models.embedder import embed
 
 client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
 

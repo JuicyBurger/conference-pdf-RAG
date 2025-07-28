@@ -5,9 +5,9 @@ Simple chat interface to test document retrieval quality
 
 import sys
 import os
-from .retriever import retrieve
-from .reranker import rerank
-from .generator import generate_answer
+from .rag.retriever import retrieve
+from .models.reranker import rerank
+from .rag.generator import generate_answer
 
 def chat_interface():
     """Interactive chat loop for testing document retrieval"""
@@ -15,29 +15,18 @@ def chat_interface():
     print("🤖 Document Chat Interface")
     print("=" * 50)
     print("💡 Ask questions about your indexed documents")
-    print("🌐 Language options: 'zh' (Chinese) or 'en' (English)")
     print("❓ Commands: 'quit', 'exit', 'q' to exit")
-    print("🔄 Commands: 'lang' to switch language")
     print("-" * 50)
-    
-    # Default language
-    current_lang = "zh"
-    print(f"🌐 Current language: {current_lang}")
     
     while True:
         try:
             # Get user input
-            question = input(f"\n❓ [{current_lang.upper()}] Your question: ").strip()
+            question = input("\n❓ Your question: ").strip()
             
             # Handle commands
             if question.lower() in ['quit', 'exit', 'q']:
                 print("👋 Goodbye!")
                 break
-                
-            elif question.lower() == 'lang':
-                current_lang = "en" if current_lang == "zh" else "zh"
-                print(f"🌐 Switched to: {current_lang}")
-                continue
                 
             elif not question:
                 print("⚠️ Please enter a question")
@@ -57,7 +46,7 @@ def chat_interface():
             
             # Generate answer
             print("🤖 Generating answer...")
-            answer = generate_answer(question, hits, lang=current_lang)
+            answer = generate_answer(question, hits)
             
             # Display results
             print("\n" + "=" * 50)
