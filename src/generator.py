@@ -10,7 +10,7 @@ from fuzzy_json import loads
 from ollama import Client
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import Filter, FieldCondition, MatchValue
-from .config import OLLAMA_HOST, OLLAMA_MODEL, QDRANT_URL, QDRANT_API_KEY
+from .config import OLLAMA_HOST, OLLAMA_MODEL, QDRANT_URL, QDRANT_API_KEY, QDRANT_COLLECTION
 from .retriever import retrieve
 from .reranker import rerank
 from .LLM import LLM
@@ -59,7 +59,7 @@ def fetch_doc_chunks(doc_id: str, limit: int = 1000):
     )
     # Note: use scroll_filter, and ask for payload
     records, _ = qdrant.scroll(
-        collection_name="docs",
+        collection_name=QDRANT_COLLECTION,
         scroll_filter=scroll_filter,
         limit=limit,
         with_payload=True

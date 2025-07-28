@@ -11,3 +11,6 @@ CHUNK_OVERLAP  = int(os.getenv("CHUNK_OVERLAP"))
 
 # Pipeline settings
 CHUNK_MAX_CHARS = int(os.getenv("CHUNK_MAX_CHARS", 800))
+
+# Qdrant collection name
+QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "docs")

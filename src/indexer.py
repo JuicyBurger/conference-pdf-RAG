@@ -9,7 +9,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.http.models import VectorParams, Distance
 
 # local
-from .config        import QDRANT_URL, QDRANT_API_KEY
+from .config        import QDRANT_URL, QDRANT_API_KEY, QDRANT_COLLECTION
 from .embedder      import model, embed
 from .pdf_ingestor  import extract_text_pages
 from .chunker       import chunk_text
@@ -18,10 +18,11 @@ from .chunker       import chunk_text
 client = QdrantClient(
     url=QDRANT_URL,
     api_key=QDRANT_API_KEY,
+    timeout=60.0,  # 60 second timeout for operations
 )
 
 
-def init_collection(collection_name: str = "docs") -> None:
+def init_collection(collection_name: str = QDRANT_COLLECTION) -> None:
     """
     (Re)create the Qdrant collection with the proper vector size & distance metric.
     """
@@ -44,7 +45,7 @@ def init_collection(collection_name: str = "docs") -> None:
     print(f"🔑 Payload index created on field 'doc_id'")
 
 
-def index_pdf(pdf_path: str, collection_name: str = "docs") -> int:
+def index_pdf(pdf_path: str, collection_name: str = QDRANT_COLLECTION) -> int:
     """
     1) Extract pages (with page numbers)
     2) Chunk each page
@@ -74,18 +75,41 @@ def index_pdf(pdf_path: str, collection_name: str = "docs") -> int:
                 "payload": payload,
             })
 
-    BATCH_SIZE = 500
+    BATCH_SIZE = 100  # Reduced from 500 to prevent timeouts
+    total_indexed = 0
+    
     for i in range(0, len(points), BATCH_SIZE):
         batch = points[i : i + BATCH_SIZE]
-        client.upsert(collection_name=collection_name, points=batch)
-        print(f"🔹 Indexed {len(points)} chunks from '{pdf_path}'")
+        batch_num = (i // BATCH_SIZE) + 1
+        total_batches = (len(points) + BATCH_SIZE - 1) // BATCH_SIZE
+        
+        print(f"📤 Uploading batch {batch_num}/{total_batches} ({len(batch)} chunks)...")
+        
+        # Retry logic for failed uploads
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                client.upsert(collection_name=collection_name, points=batch)
+                total_indexed += len(batch)
+                print(f"✅ Batch {batch_num} uploaded successfully")
+                break
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    print(f"⚠️ Batch {batch_num} failed (attempt {attempt + 1}/{max_retries}): {e}")
+                    print("🔄 Retrying in 5 seconds...")
+                    import time
+                    time.sleep(5)
+                else:
+                    print(f"❌ Batch {batch_num} failed after {max_retries} attempts: {e}")
+                    raise
     
-    return len(points)
+    print(f"🔹 Successfully indexed {total_indexed}/{len(points)} chunks from '{pdf_path}'")
+    return total_indexed
 
 
 def index_pdfs(
     pdf_paths: List[str],
-    collection_name: str = "docs",
+    collection_name: str = QDRANT_COLLECTION,
     recreate: bool = True
 ) -> None:
     """
