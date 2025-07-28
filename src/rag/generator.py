@@ -114,12 +114,19 @@ def generate_qa_pairs_for_doc(
     user_prompt = f"內容：\n{context}\n\n請直接輸出上述格式的 JSON 陣列。"
 
     # 3) Call LLM with timeout
-    raw = LLM(ollama, OLLAMA_MODEL, system_prompt, user_prompt, options={"temperature":0.4}, timeout=timeout, raw=True)
+    raw_response = LLM(ollama, OLLAMA_MODEL, system_prompt, user_prompt, options={"temperature":0.4}, timeout=timeout, raw=True)
     
-    print("LLM raw QA output:", raw["response"])
+    print("LLM raw QA output:", raw_response)
     
     # 4) Parse any broken JSON
-    qa_list = loads(raw["response"])
+    try:
+        qa_list = json.loads(raw_response)
+    except json.JSONDecodeError as e:
+        print(f"❌ JSON parsing failed: {e}")
+        print(f"Raw response: {raw_response}")
+        # Try to sanitize the JSON
+        sanitized = sanitize_json_via_llm(raw_response, ollama, OLLAMA_MODEL, timeout=timeout)
+        qa_list = json.loads(sanitized)
     
     # enforce exact count
     if len(qa_list) != num_pairs:

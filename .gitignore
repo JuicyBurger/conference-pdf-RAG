@@ -2,4 +2,7 @@
 
 extracted_images
 
-data
+# Ignore the data directory in the root, but not src/data
+/data/
+# Don't ignore the src/data directory
+!/src/data/

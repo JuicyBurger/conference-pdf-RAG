@@ -58,7 +58,7 @@ def LLM(
                     model=model,
                     messages=messages,
                     options=opts,
-                    format=Result.model_json_schema()
+                    format=Result.model_json_schema() if not raw else None
                 )
                 response = future.result(timeout=timeout)
         else:
@@ -66,7 +66,7 @@ def LLM(
                 model=model,
                 messages=messages,
                 options=opts,
-                format=Result.model_json_schema()
+                format=Result.model_json_schema() if not raw else None
             )
     except FuturesTimeout:
         raise TimeoutError(f"LLM call timed out after {timeout} seconds")
@@ -80,8 +80,14 @@ def LLM(
         print(f"<<< LLM call completed in {dur:.1f}s")
 
     # Extract the assistant's content
-    print(response["message"]["content"])
-    return extract_json(response["message"]["content"])
+    if raw:
+        # Return raw text content
+        print(response["message"]["content"])
+        return response["message"]["content"]
+    else:
+        # Return parsed JSON
+        print(response["message"]["content"])
+        return extract_json(response["message"]["content"])
 
 # Extract JSON from response
 def extract_json(response: str):
