@@ -1,0 +1,10 @@
+Traceback (most recent call last):
+  File "/home/rtx4500ada/llm-project/sinon-RAG/src/API/run_api.py", line 11, in <module>
+    from app import app
+  File "/home/rtx4500ada/llm-project/sinon-RAG/src/API/app.py", line 18, in <module>
+    from routes.chat import chat_bp
+  File "/home/rtx4500ada/llm-project/sinon-RAG/src/API/routes/chat.py", line 18, in <module>
+    from services.chat_service import chat_service
+  File "/home/rtx4500ada/llm-project/sinon-RAG/src/API/services/chat_service.py", line 26, in <module>
+    from src.models.embedder import embed
+ModuleNotFoundError: No module named 'src'

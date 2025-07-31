@@ -142,7 +142,7 @@ def index_pdf(pdf_path: str, collection_name: str = QDRANT_COLLECTION) -> int:
         })
 
     # Optimize batch size for better performance
-    BATCH_SIZE = 500  # Increased from 100 to reduce network calls
+    BATCH_SIZE = 200  # Optimal balance between speed and memory usage
     total_indexed = 0
     total_batches = (len(points) + BATCH_SIZE - 1) // BATCH_SIZE
     
@@ -157,6 +157,16 @@ def index_pdf(pdf_path: str, collection_name: str = QDRANT_COLLECTION) -> int:
         max_retries = 3
         for attempt in range(max_retries):
             try:
+                # Ensure vectors are lists of floats
+                batch = [
+                    {
+                        'id': point['id'],
+                        'vector': [float(v) for v in point['vector']] if isinstance(point['vector'], (list, tuple)) else point['vector'].tolist(),
+                        'payload': point['payload']
+                    }
+                    for point in batch
+                ]
+
                 client.upsert(collection_name=collection_name, points=batch)
                 total_indexed += len(batch)
                 print(f"✅ Batch {batch_num} uploaded successfully")
@@ -164,6 +174,27 @@ def index_pdf(pdf_path: str, collection_name: str = QDRANT_COLLECTION) -> int:
             except Exception as e:
                 if attempt < max_retries - 1:
                     print(f"⚠️ Batch {batch_num} failed (attempt {attempt + 1}/{max_retries}): {e}")
+                    
+                    # If it's a VectorStruct error and this is a large batch, try smaller chunks
+                    if "VectorStruct" in str(e) and len(batch) > 10:
+                        print(f"🔄 VectorStruct error detected. Splitting batch into smaller chunks...")
+                        # Split the batch in half and retry each part
+                        mid = len(batch) // 2
+                        batch1 = batch[:mid]
+                        batch2 = batch[mid:]
+                        
+                        try:
+                            client.upsert(collection_name=collection_name, points=batch1)
+                            total_indexed += len(batch1)
+                            print(f"✅ Batch {batch_num}a uploaded successfully ({len(batch1)} chunks)")
+                            
+                            client.upsert(collection_name=collection_name, points=batch2)
+                            total_indexed += len(batch2)
+                            print(f"✅ Batch {batch_num}b uploaded successfully ({len(batch2)} chunks)")
+                            break
+                        except Exception as split_error:
+                            print(f"⚠️ Split batch also failed: {split_error}")
+                            
                     print("🔄 Retrying in 2 seconds...")  # Reduced from 5s to 2s
                     import time
                     time.sleep(2)

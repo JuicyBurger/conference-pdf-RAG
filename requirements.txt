@@ -1,7 +1,8 @@
+# Core RAG Dependencies
 pdfplumber
 jieba
 sentence-transformers
-qdrant-client
+qdrant-client>=1.6.4
 ollama
 python-dotenv
 pandas
@@ -11,3 +12,12 @@ camelot-py[cv]
 rapidfuzz>=3.0.0
 PyMuPDF
 tqdm
+
+# API Dependencies
+Flask==2.3.3
+Flask-CORS==4.0.0
+Werkzeug==2.3.7
+
+# Built-in modules (no need to install)
+# asyncio - built-in
+# threading - built-in

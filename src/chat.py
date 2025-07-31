@@ -35,14 +35,16 @@ def chat_interface():
             # Process the question
             print("🔍 Searching documents...")
             
-            # Retrieve relevant chunks
-            hits = retrieve(question, top_k=5)
+            # Retrieve relevant chunks with optimized parameters
+            hits = retrieve(query=question, top_k=5, score_threshold=0.3)
             if not hits:
-                print("❌ No relevant documents found")
+                print("❌ No relevant documents found (try lowering search criteria)")
                 continue
                 
-            # Rerank for better relevance
-            hits = rerank(question, hits)
+            # Rerank for better relevance (only if we have multiple hits)
+            if len(hits) > 1:
+                print("📊 Reranking results...")
+                hits = rerank(question, hits)
             
             # Generate answer
             print("🤖 Generating answer...")

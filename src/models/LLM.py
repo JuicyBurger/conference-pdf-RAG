@@ -1,6 +1,3 @@
-# Author: Lau Tsz Yeung Anson
-# Contact: s11327605@gm.cyut.edu.tw/tylau70242@gmail.com
-# Updated_Date: 2025-06-21
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
@@ -8,6 +5,8 @@ from ollama import Client
 import pandas as pd
 from pydantic import BaseModel
 import json
+import requests
+from typing import Union, Dict, Any, Optional, List
 
 from dotenv import load_dotenv
 import os
@@ -18,9 +17,60 @@ load_dotenv()
 class Result(BaseModel):
   response: str
 
+class ProductionAPIClient:
+    """Client for the production API server"""
+    
+    def __init__(self, host: str = "http://localhost:8000"):
+        self.host = host.rstrip("/")
+        self.client_type = "production"
+    
+    def chat(self, model: str, messages: List[Dict[str, str]], options: Dict[str, Any] = None, format: Dict = None) -> Dict:
+        """
+        Send a chat completion request to the production API server
+        
+        Args:
+            model: Model name to use
+            messages: List of message dicts with role and content
+            options: Dictionary of options like temperature, max_tokens
+            format: Format specification (ignored for production API)
+            
+        Returns:
+            Dict with response content
+        """
+        # Convert options to API parameters
+        api_params = {
+            "model": model,
+            "messages": messages,
+            "temperature": options.get("temperature", 0.7),
+            "max_tokens": options.get("max_tokens", 1000),
+            "top_p": options.get("top_p", 1.0),
+            "stream": False
+        }
+        
+        # Make API request to the chat endpoint
+        response = requests.post(
+            f"{self.host}/v1/chat/completions",
+            json=api_params,
+            headers={"Content-Type": "application/json"}
+        )
+        
+        # Check for errors
+        if response.status_code != 200:
+            raise Exception(f"API request failed with status {response.status_code}: {response.text}")
+        
+        # Parse response
+        api_response = response.json()
+        
+        # Format response to match ollama client format
+        return {
+            "message": {
+                "content": api_response["choices"][0]["message"]["content"]
+            }
+        }
+
 # Get response from LLM
 def LLM(
-    client: Client,
+    client: Union[Client, ProductionAPIClient],
     model: str,
     system_prompt: str,
     user_prompt: str,
@@ -41,7 +91,8 @@ def LLM(
         {"role": "user",   "content": user_prompt}
     ]
 
-    print(f">>> LLM call starting (model={model})")
+    client_type = getattr(client, "client_type", "ollama")
+    print(f">>> LLM call starting (model={model}, client={client_type})")
     print(f"    system_prompt: {len(system_prompt)} chars")
     print(f"      user_prompt: {len(user_prompt)} chars")
     print(f"        options: {opts}")
@@ -50,8 +101,8 @@ def LLM(
 
     start = time.time()
     try:
-        if timeout:
-            # run in a thread so we can time out
+        if timeout and client_type == "ollama":
+            # run in a thread so we can time out (only for ollama client)
             with ThreadPoolExecutor(max_workers=1) as exec:
                 future = exec.submit(
                     client.chat,
@@ -62,12 +113,21 @@ def LLM(
                 )
                 response = future.result(timeout=timeout)
         else:
-            response = client.chat(
-                model=model,
-                messages=messages,
-                options=opts,
-                format=Result.model_json_schema() if not raw else None
-            )
+            if client_type == "production":
+                # For production API, format is handled differently
+                response = client.chat(
+                    model=model,
+                    messages=messages,
+                    options=opts
+                )
+            else:
+                # For ollama client
+                response = client.chat(
+                    model=model,
+                    messages=messages,
+                    options=opts,
+                    format=Result.model_json_schema() if not raw else None
+                )
     except FuturesTimeout:
         raise TimeoutError(f"LLM call timed out after {timeout} seconds")
     except Exception as e:
@@ -82,25 +142,63 @@ def LLM(
     # Extract the assistant's content
     if raw:
         # Return raw text content
-        print(response["message"]["content"])
+        # print(response["message"]["content"])
         return response["message"]["content"]
     else:
         # Return parsed JSON
-        print(response["message"]["content"])
+        # print(response["message"]["content"])
         return extract_json(response["message"]["content"])
 
 # Extract JSON from response
 def extract_json(response: str):
     try:
+        # First try to parse as JSON
         return json.loads(response)
     except json.JSONDecodeError:
-        return json.dumps({"Error": f"'{response}' is not a valid JSON"})
+        # If it's not valid JSON, check if it looks like a plain text response
+        # (especially Chinese text responses)
+        if any('\u4e00' <= char <= '\u9fff' for char in response):
+            # This contains Chinese characters, treat as plain text
+            return json.dumps({"response": response})
+        else:
+            # For other non-JSON responses, return as error
+            return json.dumps({"Error": f"'{response}' is not a valid JSON"})
 
-def main(client: Client, model: str):
+def get_client(client_type: str = "ollama", host: str = None) -> Union[Client, ProductionAPIClient]:
+    """
+    Get the appropriate client based on type
+    
+    Args:
+        client_type: "ollama" or "production"
+        host: Host URL or environment variable name
+        
+    Returns:
+        Client instance
+    """
+    if client_type.lower() == "ollama":
+        # For Ollama client, host can be an env var name
+        if host and host.startswith("M416_"):
+            host_url = os.getenv(host)
+            if not host_url:
+                raise ValueError(f"Environment variable {host} not found")
+            return Client(host=host_url)
+        else:
+            return Client(host=host)
+    elif client_type.lower() == "production":
+        # For production client
+        host_url = host or "http://localhost:8000"
+        return ProductionAPIClient(host=host_url)
+    else:
+        raise ValueError(f"Unknown client type: {client_type}")
+
+def main(client_type: str = "ollama", host: str = None, model: str = "llama3.1:8b-instruct-fp16"):
     data = pd.read_csv("demo.csv")
     num_files = len(data)
     result = []
     start_time = time.time()
+    
+    # Get appropriate client
+    client = get_client(client_type, host)
 
     for i in range(num_files):
         # Change system prompt and user prompt here
@@ -126,8 +224,12 @@ def main(client: Client, model: str):
     print("--- %s seconds ---" % (time.time() - start_time))
 
 if __name__ == "__main__":
-    # Change host and model here
-    # M416_3090, M416_3090ti, M416_4090
-    client = Client(host=os.getenv("M416_3090"))
-    model = "llama3.1:8b-instruct-fp16"
-    main(client, model)
+    # Change client type, host and model here
+    # Options:
+    # 1. Ollama: client_type="ollama", host="M416_3090" (env var) or direct URL
+    # 2. Production: client_type="production", host="http://localhost:8000"
+    client_type = "production"  # or "production"
+    host = "http://localhost:8000"  # or "http://localhost:8000" for production
+    model = "meta-llama-3.2-11b-vision"  # for ollama, or "meta-llama-3.2-11b-vision" for production
+    
+    main(client_type, host, model)

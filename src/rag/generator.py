@@ -5,16 +5,17 @@ import re
 import json
 import uuid
 
-from ollama import Client
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import Filter, FieldCondition, MatchValue
-from ..config import OLLAMA_HOST, OLLAMA_MODEL, QDRANT_URL, QDRANT_API_KEY, QDRANT_COLLECTION
+from ..config import QDRANT_URL, QDRANT_API_KEY, QDRANT_COLLECTION
 from .retriever import retrieve
 from ..models.reranker import rerank
 from ..models.LLM import LLM
+from ..models.client_factory import get_llm_client, get_default_model
 
-# Initialize clients
-ollama = Client(host=OLLAMA_HOST)
+# Initialize clients using the factory
+llm_client = get_llm_client()
+default_model = get_default_model()
 qdrant = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
 
 def generate_answer(query: str, hits) -> str:
@@ -32,7 +33,7 @@ def generate_answer(query: str, hits) -> str:
     )
     user_prompt = f"內容：\n{context}\n\n請問：{query}\n回答："
 
-    return LLM(ollama, OLLAMA_MODEL, system_prompt, user_prompt)
+    return LLM(llm_client, default_model, system_prompt, user_prompt, raw=True)
 
 
 def fetch_doc_chunks(doc_id: str, limit: int = 1000):
@@ -114,7 +115,7 @@ def generate_qa_pairs_for_doc(
     user_prompt = f"內容：\n{context}\n\n請直接輸出上述格式的 JSON 陣列。"
 
     # 3) Call LLM with timeout
-    raw_response = LLM(ollama, OLLAMA_MODEL, system_prompt, user_prompt, options={"temperature":0.4}, timeout=timeout, raw=True)
+    raw_response = LLM(llm_client, default_model, system_prompt, user_prompt, options={"temperature":0.4}, timeout=timeout, raw=True)
     
     print("LLM raw QA output:", raw_response)
     
@@ -125,7 +126,7 @@ def generate_qa_pairs_for_doc(
         print(f"❌ JSON parsing failed: {e}")
         print(f"Raw response: {raw_response}")
         # Try to sanitize the JSON
-        sanitized = sanitize_json_via_llm(raw_response, ollama, OLLAMA_MODEL, timeout=timeout)
+        sanitized = sanitize_json_via_llm(raw_response, llm_client, default_model, timeout=timeout)
         qa_list = json.loads(sanitized)
     
     # enforce exact count
@@ -139,7 +140,7 @@ def generate_qa_pairs_for_doc(
 
     return qa_list
 
-def sanitize_json_via_llm(raw: str, client: Client, model: str, timeout: float = 15) -> str:
+def sanitize_json_via_llm(raw: str, client, model: str, timeout: float = 15) -> str:
     """
     Ask the LLM to repair and re‐emit a valid JSON array.
     """

@@ -1,0 +1,4 @@
+Traceback (most recent call last):
+  File "/home/rtx4500ada/llm-project/sinon-RAG/src/API/run_api.py", line 11, in <module>
+    from src.API.app import app
+ModuleNotFoundError: No module named 'src'

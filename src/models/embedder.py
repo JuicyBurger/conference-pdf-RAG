@@ -11,7 +11,7 @@ model = SentenceTransformer(
 # Enable optimizations
 if torch.cuda.is_available():
     torch.backends.cudnn.benchmark = True
-    model.half()  # Use FP16 for faster inference
+    # model.half()  # REMOVED: FP16 causes precision loss leading to Qdrant VectorStruct errors
     print("🚀 Using GPU acceleration for embeddings")
 else:
     print("💻 Using CPU for embeddings")
@@ -35,7 +35,7 @@ def embed(text: Union[str, List[str]]):
             text,
             batch_size=32,  # Optimize batch size for memory/speed balance
             convert_to_tensor=False,
-            show_progress_bar=True,  # Disable progress bar for cleaner output
+            show_progress_bar=True,
             normalize_embeddings=True  # Ensure normalized embeddings
         )
         return embeddings.tolist()
