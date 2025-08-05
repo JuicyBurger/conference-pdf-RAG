@@ -8,7 +8,9 @@ Simple script to start the API server with proper configuration.
 import os
 import sys
 import logging
-from src.API.app import app
+
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from app import app
 
 def setup_logging():
     """Setup logging configuration"""

@@ -26,20 +26,24 @@ class ProductionAPIClient:
     
     def chat(self, model: str, messages: List[Dict[str, str]], options: Dict[str, Any] = None, format: Dict = None) -> Dict:
         """
-        Send a chat completion request to the production API server
+        Send a chat completion request to vLLM's OpenAI-compatible API
         
         Args:
-            model: Model name to use
+            model: Model name to use (will be mapped to the served model)
             messages: List of message dicts with role and content
             options: Dictionary of options like temperature, max_tokens
-            format: Format specification (ignored for production API)
+            format: Format specification (ignored for vLLM API)
             
         Returns:
             Dict with response content
         """
+        # Default options
+        if options is None:
+            options = {}
+            
         # Convert options to API parameters
         api_params = {
-            "model": model,
+            "model": model,  # vLLM will use whatever model is loaded
             "messages": messages,
             "temperature": options.get("temperature", 0.7),
             "max_tokens": options.get("max_tokens", 1000),
@@ -47,16 +51,17 @@ class ProductionAPIClient:
             "stream": False
         }
         
-        # Make API request to the chat endpoint
+        # Make API request to vLLM's OpenAI-compatible chat endpoint
         response = requests.post(
             f"{self.host}/v1/chat/completions",
             json=api_params,
-            headers={"Content-Type": "application/json"}
+            headers={"Content-Type": "application/json"},
+            timeout=60  # Add timeout for long generations
         )
         
         # Check for errors
         if response.status_code != 200:
-            raise Exception(f"API request failed with status {response.status_code}: {response.text}")
+            raise Exception(f"vLLM API request failed with status {response.status_code}: {response.text}")
         
         # Parse response
         api_response = response.json()

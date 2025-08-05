@@ -1,4 +1,4 @@
-from .rag.indexer import index_pdf
+from .rag.indexing.indexer import index_pdf
 
 def ingest(path):
     """Legacy ingest function - now just calls the modern index_pdf"""

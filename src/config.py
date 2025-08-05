@@ -7,6 +7,7 @@ load_dotenv()  # reads .env
 QDRANT_URL     = os.getenv("QDRANT_URL")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "docs")
+QDRANT_QA_DB = os.getenv("QDRANT_QA_DB", "qa_suggestions")
 
 # LLM Provider settings
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama")  # "ollama" or "production"
@@ -16,7 +17,8 @@ OLLAMA_HOST = os.getenv("M416_3090")  # Keep existing env var for backward compa
 # Model settings
 DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "llama3.1:8b-instruct-fp16")  # Default for Ollama
 if LLM_PROVIDER == "production":
-    DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "meta-llama-3.2-11b-vision")  # Default for Production
+    # For vLLM, use the exact model name that vLLM serves (with forward slash and capital B)
+    DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "meta-llama/Llama-3.1-8B-Instruct")  # Default for vLLM Production
 
 # Pipeline settings
 CHUNK_OVERLAP  = int(os.getenv("CHUNK_OVERLAP"))

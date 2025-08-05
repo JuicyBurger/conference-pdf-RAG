@@ -1,4 +1,4 @@
-# src/indexer.py
+# src/rag/indexing/indexer.py
 
 # stdlib
 import os, sys, glob, uuid
@@ -9,10 +9,10 @@ from qdrant_client import QdrantClient
 from qdrant_client.http.models import VectorParams, Distance
 
 # local
-from ..config        import QDRANT_URL, QDRANT_API_KEY, QDRANT_COLLECTION
-from ..models.embedder      import model, embed
-from ..data.pdf_ingestor  import build_page_nodes
-from ..data.chunker       import chunk_text
+from ...config import QDRANT_URL, QDRANT_API_KEY, QDRANT_COLLECTION
+from ...models.embedder      import model, embed
+from ...data.pdf_ingestor  import build_page_nodes
+from ...data.chunker       import chunk_text
 
 # ─── Setup Qdrant client ────────────────────────────────────────────────────────
 client = QdrantClient(
@@ -20,6 +20,38 @@ client = QdrantClient(
     api_key=QDRANT_API_KEY,
     timeout=60.0,  # 60 second timeout for operations
 )
+
+
+def ensure_indexes_exist(collection_name: str = QDRANT_COLLECTION) -> None:
+    """
+    Ensure all necessary indexes exist for the collection.
+    This is safe to call multiple times - existing indexes are ignored.
+    """
+    print(f"🔍 Ensuring indexes exist for collection '{collection_name}'...")
+    
+    # List of required indexes
+    required_indexes = [
+        ("doc_id", "keyword", "Document ID filtering"),
+        ("page", "integer", "Page number filtering"),
+        ("type", "keyword", "Content type filtering"),
+        ("text", "text", "Full-text search"),
+    ]
+    
+    for field_name, field_schema, description in required_indexes:
+        try:
+            client.create_payload_index(
+                collection_name=collection_name,
+                field_name=field_name,
+                field_schema=field_schema,
+            )
+            print(f"✅ Created {field_schema} index on '{field_name}' - {description}")
+        except Exception as e:
+            if "already exists" in str(e).lower():
+                print(f"ℹ️ Index on '{field_name}' already exists")
+            else:
+                print(f"⚠️ Could not create index on '{field_name}': {e}")
+    
+    print("🎉 All indexes ensured!")
 
 
 def init_collection(collection_name: str = QDRANT_COLLECTION) -> None:
@@ -36,13 +68,8 @@ def init_collection(collection_name: str = QDRANT_COLLECTION) -> None:
     )
     print(f"✅ Collection '{collection_name}' initialized: vectors={vector_size}, distance=Cosine")
     
-    client.create_payload_index(
-        collection_name=collection_name,
-        field_name="doc_id",
-        # keyword is the right type for exact matches on strings
-        field_schema="keyword",
-    )
-    print(f"🔑 Payload index created on field 'doc_id'")
+    # Ensure all indexes exist after creating the collection
+    ensure_indexes_exist(collection_name)
 
 
 def index_pdf(pdf_path: str, collection_name: str = QDRANT_COLLECTION) -> int:
@@ -51,6 +78,9 @@ def index_pdf(pdf_path: str, collection_name: str = QDRANT_COLLECTION) -> int:
     2) Chunk paragraphs if needed (tables are already row-based)
     3) Embed & upsert with enhanced metadata
     """
+    # Ensure indexes exist before indexing
+    ensure_indexes_exist(collection_name)
+    
     nodes = build_page_nodes(pdf_path)  # Enhanced nodes with tables
     points = []
     doc_id = os.path.splitext(os.path.basename(pdf_path))[0]
@@ -203,6 +233,28 @@ def index_pdf(pdf_path: str, collection_name: str = QDRANT_COLLECTION) -> int:
                     raise
     
     print(f"✅ Successfully indexed {total_indexed}/{len(points)} chunks from '{pdf_path}'")
+    
+    # Generate suggestions for this document (async/background process)
+    try:
+        from ..suggestions import generate_suggestions_for_doc
+        print(f"🤖 Generating question suggestions for '{doc_id}'...")
+        
+        # Generate suggestions in background (don't block indexing if it fails)
+        suggestion_success = generate_suggestions_for_doc(
+            doc_id=doc_id,
+            num_questions=8,  # Generate 8 questions per document
+            auto_init_collection=True,
+            use_lightweight=True  # Use lightweight generation for speed
+        )
+        
+        if suggestion_success:
+            print(f"✅ Question suggestions generated for '{doc_id}'")
+        else:
+            print(f"⚠️ Failed to generate suggestions for '{doc_id}' (indexing still successful)")
+            
+    except Exception as e:
+        print(f"⚠️ Suggestion generation failed for '{doc_id}': {e} (indexing still successful)")
+    
     return total_indexed
 
 
@@ -216,6 +268,9 @@ def index_pdfs(
     """
     if recreate:
         init_collection(collection_name)
+    else:
+        # Ensure indexes exist even when not recreating
+        ensure_indexes_exist(collection_name)
 
     total = 0
     print(f"📚 Indexing {len(pdf_paths)} PDF files...")
@@ -233,6 +288,15 @@ def index_pdfs(
 
 if __name__ == "__main__":
     args = sys.argv[1:]
+    
+    # Check if user wants to just ensure indexes
+    if "--ensure-indexes" in args:
+        args.remove("--ensure-indexes")
+        print("🔧 Ensuring indexes exist...")
+        ensure_indexes_exist()
+        print("✅ Indexes ensured!")
+        sys.exit(0)
+    
     recreate = "--no-recreate" not in args
     # Remove the flag from the list
     args = [a for a in args if a != "--no-recreate"]
@@ -246,7 +310,8 @@ if __name__ == "__main__":
             pdfs.append(a)
 
     if not pdfs:
-        print("Usage: python indexer.py [--no-recreate] <pdf1> [pdf2 ...]")
+        print("Usage: python -m src.rag.indexing.indexer [--ensure-indexes] [--no-recreate] <pdf1> [pdf2 ...]")
+        print("  --ensure-indexes: Just ensure indexes exist without indexing files")
         sys.exit(1)
 
     index_pdfs(pdfs, recreate=recreate)

@@ -17,7 +17,7 @@ import time
 # Import from our existing RAG system
 import sys
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
-from src.rag.indexer import index_pdf
+from src.rag.indexing.indexer import index_pdf
 from src.config import QDRANT_COLLECTION
 
 

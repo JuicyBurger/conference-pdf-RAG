@@ -18,6 +18,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from routes.chat import chat_bp
 from routes.upload import upload_bp
 from routes.status import status_bp
+from routes.suggestions import suggestions_bp
 from utils.response import error_response
 
 # Configure logging
@@ -42,6 +43,7 @@ def create_app():
     app.register_blueprint(chat_bp, url_prefix='/api/chat')
     app.register_blueprint(upload_bp, url_prefix='/api/upload')
     app.register_blueprint(status_bp, url_prefix='/api/status')
+    app.register_blueprint(suggestions_bp, url_prefix='/api/v1')
     
     # Health check endpoint
     @app.route('/', methods=['GET'])

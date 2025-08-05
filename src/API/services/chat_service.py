@@ -659,23 +659,70 @@ class AsyncChatService:
             raise
     
     async def get_chat_history(self, room_id: str, recency_k: int = 50) -> List[dict]:
-        """Get recent messages from buffer, fallback to SQL if empty"""
+        """Get recent messages from Qdrant (primary) or SQLite (fallback)"""
         
-        # Try buffer first
-        messages = self.buffer.get_recent_messages(room_id, recency_k)
+        messages = []
         
+        # Try Qdrant first (primary storage)
+        if self.client:
+            try:
+                loop = asyncio.get_event_loop()
+                
+                # Use scroll to get all messages for this room
+                from qdrant_client.http.models import Filter, FieldCondition, MatchValue
+                
+                def _get_messages():
+                    scroll_result = self.client.scroll(
+                        collection_name=self.CHAT_COLLECTION,
+                        scroll_filter=Filter(
+                            must=[FieldCondition(key="room_id", match=MatchValue(value=room_id))]
+                        ),
+                        limit=1000,  # Get all messages for this room
+                        with_payload=True,
+                        with_vectors=False
+                    )
+                    return scroll_result[0] if scroll_result else []
+                
+                qdrant_points = await loop.run_in_executor(self.executor, _get_messages)
+                
+                # Convert Qdrant points to message format
+                for point in qdrant_points:
+                    payload = point.payload
+                    message = {
+                        "msg_id": point.id,
+                        "role": payload["role"],
+                        "content": payload["content"],
+                        "timestamp": payload["timestamp"],
+                        "files": payload.get("files", []),
+                        "room_id": payload["room_id"]  # Keep for internal use
+                    }
+                    messages.append(message)
+                
+                print(f"🔍 Qdrant Chat history: {len(messages)} messages")
+                
+            except Exception as e:
+                print(f"⚠️ Qdrant retrieval failed: {e}")
+                messages = []
+        
+        # Fallback to SQLite if Qdrant failed or empty
         if not messages:
-            # Fallback to SQL
-            loop = asyncio.get_event_loop()
-            messages = await loop.run_in_executor(
-                self.executor,
-                self.fallback.get_recent_messages_fallback,
-                room_id, recency_k
-            )
-            
-            # Warm up buffer with fallback data
-            for msg in messages:
-                self.buffer.add_message(room_id, msg)
+            try:
+                loop = asyncio.get_event_loop()
+                messages = await loop.run_in_executor(
+                    self.executor,
+                    self.fallback.get_recent_messages_fallback,
+                    room_id, recency_k
+                )
+                print(f"🔍 SQLite Chat history: {len(messages)} messages")
+            except Exception as e:
+                print(f"⚠️ SQLite retrieval failed: {e}")
+                messages = []
+        
+        # Sort messages by timestamp (oldest first)
+        messages.sort(key=lambda x: x["timestamp"])
+        
+        # Take only the most recent messages
+        messages = messages[-recency_k:] if len(messages) > recency_k else messages
         
         # Return messages without internal fields (room_id, user_id)
         clean_messages = []
@@ -689,6 +736,7 @@ class AsyncChatService:
             }
             clean_messages.append(clean_msg)
         
+        print(f"🔍 Final Chat history: {len(clean_messages)} messages")
         return clean_messages
     
     async def search_messages(
@@ -713,14 +761,15 @@ class AsyncChatService:
             
             # Search in Qdrant
             def _search():
-                return self.client.search(
+                response = self.client.query_points(
                     collection_name=self.CHAT_COLLECTION,
-                    query_vector=query_vector,
+                    query=query_vector,
                     query_filter=Filter(
                         must=[FieldCondition(key="room_id", match=MatchValue(value=room_id))]
                     ),
                     limit=semantic_k
                 )
+                return response.points if hasattr(response, 'points') else []
             
             hits = await loop.run_in_executor(self.executor, _search)
             

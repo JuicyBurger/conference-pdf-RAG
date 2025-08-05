@@ -12,6 +12,11 @@ camelot-py[cv]
 rapidfuzz>=3.0.0
 PyMuPDF
 tqdm
+cn2an>=0.5.17
+
+# Quantization Dependencies (for OOM prevention)
+bitsandbytes>=0.41.0
+accelerate>=0.20.0
 
 # API Dependencies
 Flask==2.3.3

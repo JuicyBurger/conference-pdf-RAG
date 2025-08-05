@@ -5,7 +5,7 @@ import torch
 # Optimize model loading with performance settings
 model = SentenceTransformer(
     "jinaai/jina-embeddings-v2-base-zh",
-    device="cuda" if torch.cuda.is_available() else "cpu"
+    device="cuda"
 )
 
 # Enable optimizations

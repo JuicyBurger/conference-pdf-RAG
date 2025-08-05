@@ -54,8 +54,19 @@ GET /
 
 ### Chat Endpoints
 
-#### Send Message
+#### Send Message (with optional PDF upload)
 ```
+POST /api/chat/message
+Content-Type: multipart/form-data
+
+Form fields:
+- message: "What is the revenue growth?"
+- room_id: "room-123" (optional)
+- user_id: "user-456" (optional)
+- file: [PDF file] (optional)
+
+OR
+
 POST /api/chat/message
 Content-Type: application/json
 
@@ -65,6 +76,11 @@ Content-Type: application/json
   "user_id": "user-456"  // optional
 }
 ```
+
+**Workflow:**
+1. If PDF file is provided, it's processed and indexed into Qdrant first
+2. Then the user message is processed using RAG with the newly indexed content
+3. Returns AI response with chat history
 
 #### Get Chat History
 ```
@@ -150,8 +166,25 @@ console.log(`Progress: ${progress.data.progress}%`);
 console.log(`Status: ${progress.data.status}`);
 ```
 
-### 3. Send Chat Message
+### 3. Send Chat Message (with PDF upload)
 ```javascript
+// With PDF file upload
+const formData = new FormData();
+formData.append('message', 'What is the revenue growth rate?');
+formData.append('room_id', 'room-123');
+formData.append('file', pdfFile); // PDF file
+
+const response = await fetch('http://localhost:5000/api/chat/message', {
+  method: 'POST',
+  body: formData
+});
+
+const result = await response.json();
+console.log('AI Response:', result.data.messages[result.data.messages.length - 1].content);
+```
+
+```javascript
+// Without file upload (JSON)
 const response = await fetch('http://localhost:5000/api/chat/message', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
@@ -162,7 +195,7 @@ const response = await fetch('http://localhost:5000/api/chat/message', {
 });
 
 const result = await response.json();
-console.log('AI Response:', result.data.ai_response);
+console.log('AI Response:', result.data.messages[result.data.messages.length - 1].content);
 ```
 
 ### 4. Get Chat History
