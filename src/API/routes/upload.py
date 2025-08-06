@@ -102,17 +102,4 @@ def get_upload_history():
         return jsonify(error_response(f"Failed to get history: {str(e)}")), 500
 
 
-@upload_bp.route('/cancel/<task_id>', methods=['POST'])
-def cancel_upload(task_id):
-    """Cancel an ongoing upload/ingestion (placeholder)"""
-    try:
-        # TODO: Implement task cancellation
-        # For now, return not implemented
-        return jsonify(error_response(
-            "Task cancellation not yet implemented",
-            "NOT_IMPLEMENTED"
-        )), 501
-    
-    except Exception as e:
-        logger.error(f"Error cancelling upload: {e}")
-        return jsonify(error_response(f"Failed to cancel upload: {str(e)}")), 500 
+ 

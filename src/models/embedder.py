@@ -33,7 +33,7 @@ def embed(text: Union[str, List[str]]):
         # Batch of texts with optimized settings
         embeddings = model.encode(
             text,
-            batch_size=32,  # Optimize batch size for memory/speed balance
+            batch_size=16,  # Optimize batch size for memory/speed balance
             convert_to_tensor=False,
             show_progress_bar=True,
             normalize_embeddings=True  # Ensure normalized embeddings

@@ -192,11 +192,21 @@ class AsyncIngestionService:
                 )
                 total_chunks += chunks
                 
-                # Clean up uploaded file
-                try:
-                    os.remove(file_path)
-                except:
-                    pass  # Ignore cleanup errors
+                            # Clean up uploaded file
+            try:
+                os.remove(file_path)
+            except:
+                pass  # Ignore cleanup errors
+            
+            # Add document IDs to query parser for future queries
+            try:
+                from src.rag.retriever import add_new_doc_id_to_parser
+                for file_path in file_paths:
+                    doc_id = os.path.basename(file_path)
+                    add_new_doc_id_to_parser(doc_id)
+                    logger.info(f"Added '{doc_id}' to query parser vocabulary")
+            except Exception as e:
+                logger.warning(f"Failed to add document IDs to query parser: {e}")
             
             # Mark as completed
             self.progress.complete_task(task_id, success=True)

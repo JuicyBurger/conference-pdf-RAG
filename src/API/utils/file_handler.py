@@ -91,33 +91,4 @@ def validate_multiple_files(files: List[FileStorage], max_files: int = 10, max_s
     return validated_files
 
 
-def get_safe_filename(filename: str) -> str:
-    """Generate a safe filename by removing dangerous characters"""
-    if not filename:
-        return "unnamed_file.pdf"
-    
-    # Keep only alphanumeric, dots, dashes, and underscores
-    safe_chars = []
-    for char in filename:
-        if char.isalnum() or char in '.-_':
-            safe_chars.append(char)
-        else:
-            safe_chars.append('_')
-    
-    safe_filename = ''.join(safe_chars)
-    
-    # Ensure it ends with .pdf
-    if not safe_filename.lower().endswith('.pdf'):
-        safe_filename += '.pdf'
-    
-    return safe_filename
-
-
-def estimate_processing_time(file_size_bytes: int) -> int:
-    """Estimate processing time in seconds based on file size"""
-    # Rough estimate: 1MB = 10 seconds processing time
-    mb_size = file_size_bytes / (1024 * 1024)
-    estimated_seconds = int(mb_size * 10)
-    
-    # Minimum 30 seconds, maximum 10 minutes
-    return max(30, min(estimated_seconds, 600)) 
+ 

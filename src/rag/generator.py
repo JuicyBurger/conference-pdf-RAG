@@ -36,10 +36,41 @@ def generate_answer(query: str, hits) -> str:
     # Filter valid hits with proper payload structure
     valid_hits = []
     for h in hits:
-        if hasattr(h, 'payload') and h.payload and 'text' in h.payload and 'page' in h.payload:
-            valid_hits.append(h)
-        else:
-            print(f"⚠️ Skipping hit without proper payload structure: {getattr(h, 'id', 'unknown')}")
+        try:
+            # Check for both 'text' and 'content' fields (different indexing methods)
+            text_field = None
+            if hasattr(h, 'payload') and h.payload:
+                if 'text' in h.payload:
+                    text_field = 'text'
+                elif 'content' in h.payload:
+                    text_field = 'content'
+                
+                if text_field and 'page' in h.payload:
+                    # Additional validation: ensure text is not empty
+                    if h.payload[text_field] and h.payload[text_field].strip():
+                        # Create a normalized hit with 'text' field for consistency
+                        normalized_hit = type('Hit', (), {
+                            'id': getattr(h, 'id', 'unknown'),
+                            'score': getattr(h, 'score', 0.0),
+                            'payload': {
+                                'text': h.payload[text_field],
+                                'page': h.payload['page'],
+                                'doc_id': h.payload.get('doc_id', 'unknown'),
+                                'type': h.payload.get('type', 'unknown')
+                            }
+                        })()
+                        valid_hits.append(normalized_hit)
+                    else:
+                        print(f"⚠️ Skipping hit with empty {text_field}: {getattr(h, 'id', 'unknown')}")
+                else:
+                    print(f"⚠️ Skipping hit without proper payload structure: {getattr(h, 'id', 'unknown')}")
+                    if hasattr(h, 'payload'):
+                        print(f"   Payload keys: {list(h.payload.keys()) if h.payload else 'None'}")
+            else:
+                print(f"⚠️ Skipping hit without payload: {getattr(h, 'id', 'unknown')}")
+        except Exception as e:
+            print(f"⚠️ Error processing hit {getattr(h, 'id', 'unknown')}: {e}")
+            continue
     
     if not valid_hits:
         return "抱歉，我沒有找到相關的資訊來回答您的問題。"

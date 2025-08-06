@@ -16,6 +16,23 @@ client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
 # Global query parser instance
 _query_parser = None
 
+def bootstrap_jieba_from_qdrant():
+    """Bootstrap jieba dictionary with all document IDs from Qdrant."""
+    try:
+        doc_ids = get_all_doc_ids()
+        if doc_ids:
+            # Update the global parser with all doc IDs
+            global _query_parser
+            _query_parser = QueryParser(doc_ids)
+            logger.info(f"✅ Bootstrapped jieba with {len(doc_ids)} document IDs from Qdrant")
+            return True
+        else:
+            logger.warning("No document IDs found in Qdrant for bootstrapping")
+            return False
+    except Exception as e:
+        logger.error(f"Failed to bootstrap jieba from Qdrant: {e}")
+        return False
+
 def _get_query_parser():
     """Get or create the global query parser instance with known doc IDs."""
     global _query_parser
@@ -24,6 +41,11 @@ def _get_query_parser():
         known_doc_ids = get_all_doc_ids()
         _query_parser = QueryParser(known_doc_ids)
     return _query_parser
+
+def add_new_doc_id_to_parser(doc_id: str):
+    """Add a new document ID to the global query parser."""
+    parser = _get_query_parser()
+    return parser.add_new_doc_id(doc_id)
 
 def get_all_doc_ids():
     """Retrieve all unique document IDs from the Qdrant collection."""
@@ -60,13 +82,7 @@ def get_all_doc_ids():
         logger.warning(f"Failed to retrieve doc IDs from Qdrant: {e}")
         return []
 
-def refresh_known_doc_ids():
-    """Refresh the list of known document IDs in the query parser."""
-    global _query_parser
-    if _query_parser is not None:
-        known_doc_ids = get_all_doc_ids()
-        _query_parser.update_known_doc_ids(known_doc_ids)
-        logger.info(f"Refreshed known doc IDs: {len(known_doc_ids)} documents")
+
 
 def retrieve(query: str, top_k: int = 5, score_threshold: float = 0.3):
     """
@@ -96,11 +112,25 @@ def retrieve(query: str, top_k: int = 5, score_threshold: float = 0.3):
     must_filters = []
     
     # Document ID constraints (support multiple docs)
+    doc_id_constraints_applied = False
     if doc_ids := constraints.get('doc_ids'):
-        if len(doc_ids) == 1:
-            must_filters.append(FieldCondition(key="doc_id", match=MatchValue(value=doc_ids[0])))
+        # Clean and validate doc_ids
+        cleaned_doc_ids = []
+        for doc_id in doc_ids:
+            # Remove any trailing punctuation or extra text
+            cleaned_id = doc_id.strip().rstrip(',.!?;:')
+            if cleaned_id and len(cleaned_id) > 0:
+                cleaned_doc_ids.append(cleaned_id)
+        
+        if cleaned_doc_ids:
+            logger.info(f"Using document ID constraints: {cleaned_doc_ids}")
+            if len(cleaned_doc_ids) == 1:
+                must_filters.append(FieldCondition(key="doc_id", match=MatchValue(value=cleaned_doc_ids[0])))
+            else:
+                must_filters.append(FieldCondition(key="doc_id", match=MatchAny(any=cleaned_doc_ids)))
+            doc_id_constraints_applied = True
         else:
-            must_filters.append(FieldCondition(key="doc_id", match=MatchAny(any=doc_ids)))
+            logger.warning("No valid document IDs found in constraints")
     
     # Page number constraints
     if pages := constraints.get('pages'):
@@ -168,6 +198,29 @@ def retrieve(query: str, top_k: int = 5, score_threshold: float = 0.3):
                     dense_hits = [h for h in dense_hits if h.score >= score_threshold]
             else:
                 dense_hits = []
+
+    # -------------------- Graceful fallback for doc_id constraints --------------------
+    # If we applied doc_id constraints but got no results, try without them
+    if doc_id_constraints_applied and not dense_hits:
+        logger.info("No results with doc_id constraints, trying without them...")
+        try:
+            # Remove doc_id constraints but keep other constraints
+            fallback_filters = [f for f in must_filters if not isinstance(f, FieldCondition) or f.key != "doc_id"]
+            fallback_filter = Filter(must=fallback_filters) if fallback_filters else None
+            
+            response = client.query_points(
+                collection_name=QDRANT_COLLECTION,
+                query=q_vec,
+                query_filter=fallback_filter,
+                limit=initial_limit,
+                score_threshold=score_threshold
+            )
+            fallback_hits = response.points if hasattr(response, 'points') else []
+            if fallback_hits:
+                logger.info(f"Found {len(fallback_hits)} results without doc_id constraints")
+                dense_hits = fallback_hits
+        except Exception as e:
+            logger.warning(f"Fallback search failed: {e}")
 
     # -------------------- Keyword / full-text search --------------------
     keyword_hits = []

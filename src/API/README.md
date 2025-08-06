@@ -10,6 +10,7 @@ A Flask-based REST API for real-time chat and PDF document processing using Qdra
 - **Semantic Search**: Advanced semantic search with time decay for chat history
 - **Progress Tracking**: Real-time progress updates for document ingestion
 - **Async Processing**: Non-blocking async operations for optimal performance
+- **Question Suggestions**: Generate and retrieve intelligent question suggestions for documents
 
 ## Quick Start
 
@@ -140,6 +141,39 @@ GET /api/status/progress/{task_id}
 GET /api/status/tasks?status=processing&limit=20
 ```
 
+### Suggestions Endpoints
+
+#### Get Question Suggestions
+```
+GET /api/v1/suggestions?doc_id=document_id&k=5
+```
+
+#### Generate Question Suggestions
+```
+POST /api/v1/suggestions
+Content-Type: application/json
+
+{
+  "doc_id": "document_id",  // Single document
+  "num_questions": 8,       // Number of questions to generate
+  "use_lightweight": true,  // Use lightweight generation (faster)
+  "auto_init_collection": true
+}
+
+OR for batch generation:
+
+{
+  "doc_ids": ["doc1", "doc2", "doc3"],  // Multiple documents
+  "num_questions": 8,
+  "use_lightweight": true
+}
+```
+
+#### List Documents with Suggestions
+```
+GET /api/v1/suggestions/docs
+```
+
 ## Example Usage
 
 ### 1. Upload a PDF
@@ -205,6 +239,47 @@ const history = await response.json();
 
 history.data.messages.forEach(msg => {
   console.log(`${msg.role}: ${msg.text}`);
+});
+```
+
+### 5. Generate Question Suggestions
+```javascript
+// Generate suggestions for a single document
+const response = await fetch('http://localhost:5000/api/v1/suggestions', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    doc_id: 'document_123',
+    num_questions: 10,
+    use_lightweight: true
+  })
+});
+
+const result = await response.json();
+console.log('Generation result:', result.data);
+
+// Generate suggestions for multiple documents
+const batchResponse = await fetch('http://localhost:5000/api/v1/suggestions', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    doc_ids: ['doc1', 'doc2', 'doc3'],
+    num_questions: 8,
+    use_lightweight: true
+  })
+});
+
+const batchResult = await batchResponse.json();
+console.log('Batch generation result:', batchResult.data);
+```
+
+### 6. Get Existing Suggestions
+```javascript
+const response = await fetch('http://localhost:5000/api/v1/suggestions?doc_id=document_123&k=5');
+const suggestions = await response.json();
+
+suggestions.data.suggestions.forEach(suggestion => {
+  console.log(`Question: ${suggestion}`);
 });
 ```
 
@@ -280,6 +355,12 @@ All API responses follow this format:
 - **Chat Context**: Combines document context with chat history
 - **Response Generation**: Uses existing LLM generation pipeline
 
+### Suggestions System
+- **Question Generation**: AI-powered question generation for documents
+- **Lightweight Mode**: Fast question-only generation for better performance
+- **Batch Processing**: Support for generating suggestions for multiple documents
+- **Catalog Storage**: Persistent storage of generated suggestions
+
 ## Development
 
 ### Project Structure
@@ -294,7 +375,8 @@ API/
 ├── routes/
 │   ├── chat.py          # Chat endpoints
 │   ├── upload.py        # Upload endpoints
-│   └── status.py        # Status endpoints
+│   ├── status.py        # Status endpoints
+│   └── suggestions.py   # Suggestions endpoints
 └── utils/
     ├── response.py      # Response formatting
     └── file_handler.py  # File validation

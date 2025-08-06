@@ -37,15 +37,4 @@ def get_default_model() -> str:
     """
     return DEFAULT_MODEL
 
-def get_client_info() -> dict:
-    """
-    Get information about the current client configuration
-    
-    Returns:
-        Dict with client information
-    """
-    return {
-        "provider": LLM_PROVIDER,
-        "host": PRODUCTION_HOST if LLM_PROVIDER == "production" else OLLAMA_HOST,
-        "default_model": DEFAULT_MODEL
-    } 
+ 

@@ -234,6 +234,14 @@ def index_pdf(pdf_path: str, collection_name: str = QDRANT_COLLECTION) -> int:
     
     print(f"✅ Successfully indexed {total_indexed}/{len(points)} chunks from '{pdf_path}'")
     
+    # Add the document ID to the query parser for future queries
+    try:
+        from ..retriever import add_new_doc_id_to_parser
+        add_new_doc_id_to_parser(doc_id)
+        print(f"✅ Added '{doc_id}' to query parser vocabulary")
+    except Exception as e:
+        print(f"⚠️ Failed to add '{doc_id}' to query parser: {e}")
+    
     # Generate suggestions for this document (async/background process)
     try:
         from ..suggestions import generate_suggestions_for_doc

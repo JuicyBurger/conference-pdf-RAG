@@ -96,6 +96,21 @@ def create_app():
 app = create_app()
 
 if __name__ == '__main__':
+    # Set CUDA memory allocation configuration
+    os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+    print("✅ Set PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True")
+    
+    # Bootstrap jieba with document IDs from Qdrant
+    try:
+        from src.rag.retriever import bootstrap_jieba_from_qdrant
+        bootstrap_success = bootstrap_jieba_from_qdrant()
+        if bootstrap_success:
+            print("✅ Successfully bootstrapped jieba with document IDs")
+        else:
+            print("⚠️ Jieba bootstrap failed, will use fallback segmentation")
+    except Exception as e:
+        print(f"⚠️ Failed to bootstrap jieba: {e}")
+    
     # Ensure data directories exist
     os.makedirs('data/uploads', exist_ok=True)
     

@@ -258,16 +258,7 @@ def build_page_nodes(pdf_path: str) -> List[Dict[str, Any]]:
     return all_nodes
 
 
-def ingest_pdf(pdf_path: str) -> Dict[str, Any]:
-    """
-    Full ingestion: returns dict with
-      - pages: List[{"page","text"}]
-      - images: List[{"page","bbox","ext","img_bytes"}]
-    """
-    return {
-        "pages": extract_text_pages(pdf_path),
-        "images": extract_image_blocks(pdf_path),
-    }
+
 
 
 

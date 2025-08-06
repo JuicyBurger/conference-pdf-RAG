@@ -27,15 +27,47 @@ class QueryParser:
         """
         self.known_doc_ids = known_doc_ids or []
         
-        # Add custom words to jieba dictionary for better segmentation
-        custom_words = [
+        # Add essential domain words to jieba dictionary for better segmentation
+        # These are core concepts that should always be available
+        essential_words = [
             "合併財報", "財務報表", "年報", "季報", "月報",
             "第一頁", "第二頁", "第三頁", "第四頁", "第五頁",
-            "表格", "段落", "附註", "備註"
+            "表格", "段落", "附註", "備註",
+            "議事手冊", "手冊", "議事"
         ]
         
-        for word in custom_words:
+        for word in essential_words:
             jieba.add_word(word)
+        
+        # Dynamically add document IDs to jieba if provided
+        if known_doc_ids:
+            self._add_doc_ids_to_jieba(known_doc_ids)
+    
+    def _add_doc_ids_to_jieba(self, doc_ids: List[str]):
+        """Add document IDs to jieba dictionary for better segmentation."""
+        added_count = 0
+        for doc_id in doc_ids:
+            # Only add reasonable-length document IDs
+            if doc_id and len(doc_id) < 100 and doc_id.strip():
+                jieba.add_word(doc_id.strip())
+                added_count += 1
+                logger.debug(f"Added to jieba: '{doc_id}'")
+        
+        if added_count > 0:
+            logger.info(f"Added {added_count} document IDs to jieba dictionary")
+    
+    def add_new_doc_id(self, doc_id: str):
+        """Add a new document ID to both jieba and known_doc_ids."""
+        if doc_id and len(doc_id) < 100 and doc_id.strip():
+            clean_doc_id = doc_id.strip()
+            jieba.add_word(clean_doc_id)
+            if clean_doc_id not in self.known_doc_ids:
+                self.known_doc_ids.append(clean_doc_id)
+                logger.info(f"Added new doc_id to parser: '{clean_doc_id}'")
+            return True
+        else:
+            logger.warning(f"Invalid doc_id for jieba: '{doc_id}'")
+            return False
     
     def update_known_doc_ids(self, doc_ids: List[str]):
         """Update the list of known document IDs for fuzzy matching."""
@@ -108,9 +140,18 @@ class QueryParser:
         patterns = [
             r'([A-Za-z0-9]+Q[1-4][A-Za-z0-9]*[^\\s]*)',  # Quarterly reports
             r'(\d{4}年?[第]?[一二三四1-4][季度]?[A-Za-z0-9]*[^\\s]*)',  # Year-based reports
-            r'([A-Za-z0-9_]+\.pdf)',  # PDF filenames
-            r'([A-Za-z]{2,}[0-9]{2,}[A-Za-z0-9]*)',  # Mixed alphanumeric codes
+            r'([\u4e00-\u9fffA-Za-z0-9_\s]+\.pdf)(?=[,\s]|$)',  # PDF filenames with Chinese characters
+            r'([A-Za-z]{2,}[0-9]{2,}[A-Za-z0-9]*)(?=[,\s]|$)',  # Mixed alphanumeric codes - must be followed by comma, space, or end
         ]
+        
+        # Additional pattern for better PDF filename extraction
+        pdf_pattern = r'([\u4e00-\u9fffA-Za-z0-9_\s]+\.pdf)'
+        pdf_matches = re.findall(pdf_pattern, text)
+        for match in pdf_matches:
+            # Clean up the match to remove trailing text
+            clean_match = match.strip()
+            if clean_match and clean_match not in doc_ids:
+                doc_ids.append(clean_match)
         
         for pattern in patterns:
             matches = re.findall(pattern, text, re.IGNORECASE)
@@ -120,9 +161,15 @@ class QueryParser:
         words = jieba.lcut(text)
         for word in words:
             # Check if word looks like a document ID
-            if len(word) > 3 and re.search(r'[A-Za-z0-9]', word):
-                if any(char in word for char in ['Q', '財報', '報表', '年報', '季報']):
+            if len(word) > 3 and re.search(r'[A-Za-z0-9\u4e00-\u9fff]', word):
+                # Look for PDF files with Chinese characters
+                if word.endswith('.pdf') or any(char in word for char in ['Q', '財報', '報表', '年報', '季報', '手冊', '議事']):
                     doc_ids.append(word)
+                    # Auto-add PDF filenames to jieba for future queries
+                    if word.endswith('.pdf') and word not in self.known_doc_ids:
+                        jieba.add_word(word)
+                        self.known_doc_ids.append(word)
+                        logger.debug(f"Auto-added PDF filename to jieba: '{word}'")
         
         # Fuzzy matching against known document IDs
         if self.known_doc_ids:
@@ -255,6 +302,39 @@ class QueryParser:
         
         logger.debug(f"Extracted constraints: {constraints}")
         logger.debug(f"Cleaned query: {cleaned_query}")
+        
+        # Add validation for doc_ids
+        if 'doc_ids' in constraints:
+            logger.info(f"Extracted doc_ids: {constraints['doc_ids']}")
+            # Validate each doc_id
+            valid_doc_ids = []
+            for doc_id in constraints['doc_ids']:
+                if doc_id and doc_id.strip() and len(doc_id.strip()) > 0:
+                    # Clean up any trailing punctuation or extra text
+                    cleaned_id = doc_id.strip().rstrip(',.!?;:')
+                    
+                    # Additional cleaning: remove text after the last .pdf
+                    if '.pdf' in cleaned_id:
+                        # Find the last occurrence of .pdf and keep only up to that point
+                        pdf_end = cleaned_id.rfind('.pdf') + 4  # +4 to include '.pdf'
+                        cleaned_id = cleaned_id[:pdf_end]
+                    
+                    # Remove any remaining quotes or extra punctuation
+                    cleaned_id = cleaned_id.strip('"\'')
+                    
+                    # Remove .pdf extension for matching against Qdrant doc_ids
+                    if cleaned_id.endswith('.pdf'):
+                        cleaned_id = cleaned_id[:-4]  # Remove .pdf extension
+                    
+                    if cleaned_id and len(cleaned_id) > 4:  # Minimum reasonable length
+                        valid_doc_ids.append(cleaned_id)
+                        logger.debug(f"Valid doc_id (without .pdf): '{cleaned_id}'")
+                    else:
+                        logger.warning(f"Cleaned doc_id too short: '{cleaned_id}'")
+                else:
+                    logger.warning(f"Invalid doc_id found: '{doc_id}'")
+            constraints['doc_ids'] = valid_doc_ids
+            logger.info(f"Final valid doc_ids (for Qdrant matching): {valid_doc_ids}")
         
         return cleaned_query, constraints
 
