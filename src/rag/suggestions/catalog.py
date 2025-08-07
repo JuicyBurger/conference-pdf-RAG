@@ -234,3 +234,67 @@ def update_popularity_score(
     except Exception as e:
         logger.error(f"Failed to update popularity score: {e}")
         return False
+
+
+def retrieve_random_suggestions(
+    k: int = 5,
+    collection_name: str = QDRANT_QA_DB
+) -> List[Dict]:
+    """
+    Retrieve random question suggestions from the database.
+    
+    Args:
+        k: Number of random suggestions to retrieve
+        collection_name: Name of the collection
+        
+    Returns:
+        List of suggestion dictionaries
+    """
+    try:
+        # Get total count of suggestions
+        response = client.scroll(
+            collection_name=collection_name,
+            limit=1,
+            with_payload=True,
+            with_vectors=False
+        )
+        
+        if not response[0]:
+            logger.warning("No suggestions found in collection")
+            return []
+        
+        # Get all suggestions and randomly sample
+        all_response = client.scroll(
+            collection_name=collection_name,
+            limit=10000,  # Get all suggestions (reasonable limit)
+            with_payload=True,
+            with_vectors=False
+        )
+        
+        if not all_response[0]:
+            return []
+        
+        all_suggestions = all_response[0]
+        
+        # Randomly sample k suggestions
+        import random
+        random_suggestions = random.sample(all_suggestions, min(k, len(all_suggestions)))
+        
+        # Convert to standard format
+        suggestions = []
+        for suggestion in random_suggestions:
+            suggestions.append({
+                "id": suggestion.id,
+                "question_text": suggestion.payload.get("question_text", ""),
+                "doc_id": suggestion.payload.get("doc_id", ""),
+                "sections": suggestion.payload.get("sections", []),
+                "tags": suggestion.payload.get("tags", []),
+                "popularity_score": suggestion.payload.get("popularity_score", 0.0)
+            })
+        
+        logger.info(f"🎲 Retrieved {len(suggestions)} random suggestions")
+        return suggestions
+        
+    except Exception as e:
+        logger.error(f"Failed to retrieve random suggestions: {e}")
+        return []

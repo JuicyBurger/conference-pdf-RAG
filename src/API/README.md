@@ -145,7 +145,9 @@ GET /api/status/tasks?status=processing&limit=20
 
 #### Get Question Suggestions
 ```
-GET /api/v1/suggestions?doc_id=document_id&k=5
+GET /api/v1/suggestions?room_id=room-123&k=5
+GET /api/v1/suggestions?doc_id=document_id&k=5  // Still supported for documents
+GET /api/v1/suggestions?k=5  // Random suggestions when no room_id or doc_id provided
 ```
 
 #### Generate Question Suggestions
@@ -202,11 +204,11 @@ console.log(`Status: ${progress.data.status}`);
 
 ### 3. Send Chat Message (with PDF upload)
 ```javascript
-// With PDF file upload
+// With PDF file upload (NEW: PDF is parsed and summarized, not ingested into RAG)
 const formData = new FormData();
-formData.append('message', 'What is the revenue growth rate?');
+formData.append('content', 'What is the revenue growth rate?');
 formData.append('room_id', 'room-123');
-formData.append('file', pdfFile); // PDF file
+formData.append('file', pdfFile); // PDF file - will be summarized for immediate analysis
 
 const response = await fetch('http://localhost:5000/api/chat/message', {
   method: 'POST',
@@ -215,6 +217,7 @@ const response = await fetch('http://localhost:5000/api/chat/message', {
 
 const result = await response.json();
 console.log('AI Response:', result.data.messages[result.data.messages.length - 1].content);
+console.log('PDF Processing Info:', result.data.messages.find(m => m.files).files);
 ```
 
 ```javascript
@@ -224,7 +227,7 @@ const response = await fetch('http://localhost:5000/api/chat/message', {
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({
     room_id: 'room-123',
-    message: 'What is the revenue growth rate?'
+    content: 'What is the revenue growth rate?'
   })
 });
 
@@ -275,11 +278,28 @@ console.log('Batch generation result:', batchResult.data);
 
 ### 6. Get Existing Suggestions
 ```javascript
-const response = await fetch('http://localhost:5000/api/v1/suggestions?doc_id=document_123&k=5');
-const suggestions = await response.json();
+// Get suggestions for a chat room
+const roomResponse = await fetch('http://localhost:5000/api/v1/suggestions?room_id=room-123&k=5');
+const roomSuggestions = await roomResponse.json();
 
-suggestions.data.suggestions.forEach(suggestion => {
-  console.log(`Question: ${suggestion}`);
+roomSuggestions.data.suggestions.forEach(suggestion => {
+  console.log(`Room Question: ${suggestion}`);
+});
+
+// Get suggestions for a document (still supported)
+const docResponse = await fetch('http://localhost:5000/api/v1/suggestions?doc_id=document_123&k=5');
+const docSuggestions = await docResponse.json();
+
+docSuggestions.data.suggestions.forEach(suggestion => {
+  console.log(`Document Question: ${suggestion}`);
+});
+
+// Get random suggestions (when no room_id or doc_id provided)
+const randomResponse = await fetch('http://localhost:5000/api/v1/suggestions?k=5');
+const randomSuggestions = await randomResponse.json();
+
+randomSuggestions.data.suggestions.forEach(suggestion => {
+  console.log(`Random Question: ${suggestion}`);
 });
 ```
 
@@ -344,6 +364,7 @@ All API responses follow this format:
 - **Recency Buffer**: In-memory buffer for fast recent message access
 - **SQLite Fallback**: Backup storage for service restarts
 - **Semantic Search**: Time-decay weighted semantic search
+- **PDF Processing**: Real-time PDF parsing and summarization (without RAG ingestion)
 
 ### Ingestion System
 - **Async Processing**: Background PDF processing with progress tracking
@@ -356,10 +377,20 @@ All API responses follow this format:
 - **Response Generation**: Uses existing LLM generation pipeline
 
 ### Suggestions System
-- **Question Generation**: AI-powered question generation for documents
-- **Lightweight Mode**: Fast question-only generation for better performance
-- **Batch Processing**: Support for generating suggestions for multiple documents
+- **Room-based Generation**: AI-powered question generation based on chat conversation context
+- **Conversation Analysis**: Analyzes chat history to generate relevant follow-up questions
+- **Document Support**: Still supports traditional document-based question generation
+- **Contextual Questions**: Generates questions that naturally continue the conversation flow
 - **Catalog Storage**: Persistent storage of generated suggestions
+- **Random Discovery**: Retrieve random suggestions for content exploration
+
+### PDF Processing (NEW)
+- **Real-time Analysis**: Immediate PDF parsing and summarization without RAG ingestion
+- **Smart Processing**: Large PDFs (>20MB) get summarized, smaller ones get full text extraction
+- **Temporary Storage**: PDFs are processed temporarily and cleaned up after analysis
+- **LLM Integration**: Uses existing LLM infrastructure for intelligent summarization
+- **Context Priority**: PDF content takes priority over RAG documents in responses
+- **Error Handling**: Graceful fallback when PDF processing fails
 
 ## Development
 

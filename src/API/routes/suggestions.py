@@ -12,7 +12,7 @@ import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from src.API.utils.response import success_response, error_response
-from src.rag.suggestions import retrieve_suggestions, get_all_doc_ids_with_suggestions
+from src.rag.suggestions import retrieve_suggestions, retrieve_random_suggestions, get_all_doc_ids_with_suggestions
 from src.rag.suggestions.generator import generate_suggestions_for_doc, batch_generate_suggestions
 from src.API.services.chat_service import chat_service
 
@@ -66,12 +66,18 @@ def get_suggestions():
             doc_id = f"room_{room_id}"
         
         if not doc_id:
-            # If no doc_id/room_id provided, return available documents with suggestions
-            doc_ids = get_all_doc_ids_with_suggestions()
-            return success_response({
-                "available_docs": doc_ids,
-                "message": "Provide doc_id or room_id parameter to get suggestions"
-            })
+            # If no doc_id/room_id provided, return random suggestions
+            logger.info(f"🎲 No doc_id or room_id provided, retrieving {k} random suggestions")
+            suggestions_data = retrieve_random_suggestions(k=k)
+            
+            if not suggestions_data:
+                return success_response([])
+            
+            # Extract just the question text for the response
+            suggestions = [{'id': item["id"], 'text': item["question_text"]} for item in suggestions_data]
+            
+            logger.info(f"✅ Retrieved {len(suggestions)} random suggestions")
+            return success_response(suggestions)
         
         # Retrieve suggestions for the specific document/room
         suggestions_data = retrieve_suggestions(
@@ -83,34 +89,14 @@ def get_suggestions():
         if not suggestions_data:
             identifier = room_id if room_id else doc_id
             identifier_type = "room" if room_id else "document"
-            return success_response({
-                "doc_id" if not room_id else "room_id": identifier,
-                "suggestions": [],
-                "total": 0,
-                "message": f"No suggestions found for {identifier_type}: {identifier}"
-            })
+            return success_response([])
         
         # Extract just the question text for the response
-        suggestions = [item["question_text"] for item in suggestions_data]
-        
-        response_data = {
-            "suggestions": suggestions,
-            "total": len(suggestions)
-        }
-        
-        # Add identifier info
-        if room_id:
-            response_data["room_id"] = room_id
-        else:
-            response_data["doc_id"] = doc_id
-        
-        # Add topic info if provided
-        if topic:
-            response_data["topic"] = topic
+        suggestions = [{'id': item["id"], 'text': item["question_text"]} for item in suggestions_data]
         
         identifier = room_id if room_id else doc_id
         logger.info(f"✅ Retrieved {len(suggestions)} suggestions for {identifier}")
-        return success_response(response_data)
+        return success_response(suggestions)
         
     except ValueError as e:
         logger.error(f"Invalid parameter in suggestions request: {e}")
@@ -175,10 +161,7 @@ def generate_suggestions():
         use_lightweight = data.get('use_lightweight', True)
         auto_init_collection = data.get('auto_init_collection', True)
         
-        # Validate required fields
-        if not doc_id and not room_id:
-            return error_response("Either doc_id or room_id is required", 400)
-        
+        # Validate fields
         if doc_id and room_id:
             return error_response("Provide either doc_id OR room_id, not both", 400)
         
@@ -254,6 +237,10 @@ def generate_suggestions():
                 })
             else:
                 return error_response(f"Failed to generate suggestions for document: {doc_id}", 500)
+        
+        # Handle case when neither doc_id nor room_id is provided
+        else:
+            return error_response("Either doc_id or room_id is required for generation", 400)
         
     except ValueError as e:
         logger.error(f"Invalid parameter in generate suggestions request: {e}")

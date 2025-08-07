@@ -5,6 +5,7 @@ from .catalog import (
     init_suggestion_collection,
     store_questions,
     retrieve_suggestions,
+    retrieve_random_suggestions,
     get_all_doc_ids_with_suggestions,
     update_popularity_score
 )
@@ -18,6 +19,7 @@ __all__ = [
     "init_suggestion_collection", 
     "store_questions",
     "retrieve_suggestions",
+    "retrieve_random_suggestions",
     "get_all_doc_ids_with_suggestions",
     "update_popularity_score",
     "generate_suggestions_for_doc",

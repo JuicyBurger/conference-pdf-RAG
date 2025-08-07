@@ -24,7 +24,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 from src.rag.retriever import retrieve
 from src.rag.generator import generate_answer
 from src.models.reranker import rerank
-from src.rag.indexing.indexer import index_pdf
+from src.data.pdf_summarizer import summarize_pdf_content, extract_pdf_text_for_chat
 from src.config import QDRANT_COLLECTION
 
 logger = logging.getLogger(__name__)
@@ -41,8 +41,8 @@ def run_async(coro):
         loop.close()
 
 
-def build_context_prompt(user_message: str, chat_history: list, document_hits: list = None) -> str:
-    """Build a comprehensive context prompt with chat history and documents"""
+def build_context_prompt(user_message: str, chat_history: list, document_hits: list = None, pdf_summary: str = None) -> str:
+    """Build a comprehensive context prompt with chat history, documents, and PDF summary"""
     
     # Build chat context from recent messages
     chat_context = ""
@@ -53,18 +53,28 @@ def build_context_prompt(user_message: str, chat_history: list, document_hits: l
             chat_context += f"{role}: {msg['content']}\n"
         chat_context += "\n"
     
-    # Build document context
+    # Build PDF summary context (NEW: Priority over document hits)
+    pdf_context = ""
+    if pdf_summary:
+        pdf_context = f"Uploaded PDF Content:\n{pdf_summary}\n\n"
+    
+    # Build document context (from existing RAG system)
     doc_context = ""
     if document_hits:
-        doc_context = "Relevant documents:\n"
+        doc_context = "Relevant documents from knowledge base:\n"
         for i, hit in enumerate(document_hits[:3], 1):  # Top 3 documents
             content = hit.payload.get('content', '')[:500]  # First 500 chars
             page = hit.payload.get('page', 'unknown')
             doc_context += f"Document {i} (Page {page}): {content}...\n"
         doc_context += "\n"
     
-    # Combine everything
-    full_prompt = f"""{chat_context}{doc_context}Current question: {user_message}
+    # Combine everything with PDF content getting priority
+    if pdf_summary:
+        full_prompt = f"""{chat_context}{pdf_context}{doc_context}Current question: {user_message}
+
+Please respond in Traditional Chinese based on the uploaded PDF content first, then reference conversation history and any relevant documents from the knowledge base. Be specific and cite information from the PDF when relevant."""
+    else:
+        full_prompt = f"""{chat_context}{doc_context}Current question: {user_message}
 
 Please respond in Traditional Chinese, referencing both the conversation history and any relevant documents. If referencing documents, include page numbers."""
     
@@ -133,8 +143,9 @@ def send_message():
                 chat_service.rooms[room_id] = room_data
                 is_new_room = True
         
-        # Process PDF file first if provided
+        # Process PDF file first if provided (NEW: Parse and summarize instead of ingesting)
         uploaded_files = []
+        pdf_summary = None
         if pdf_file:
             print(f"📄 Processing PDF file: {pdf_file.filename}")
             
@@ -142,134 +153,215 @@ def send_message():
             upload_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..', 'data', 'uploads')
             os.makedirs(upload_dir, exist_ok=True)
             
-            # Save PDF permanently with original filename
+            # Save PDF temporarily for processing
             import time
             timestamp = int(time.time())
             safe_filename = f"{timestamp}_{pdf_file.filename}"
-            permanent_path = os.path.join(upload_dir, safe_filename)
+            temp_path = os.path.join(upload_dir, safe_filename)
             
-            # Save file permanently
-            pdf_file.save(permanent_path)
-            print(f"💾 Saved PDF to: {permanent_path}")
+            # Save file temporarily for processing
+            pdf_file.save(temp_path)
+            print(f"💾 Saved PDF temporarily to: {temp_path}")
             
             try:
-                # Process PDF using existing indexer
-                print(f"🔄 Indexing PDF: {pdf_file.filename}")
-                chunks_indexed = index_pdf(permanent_path, collection_name=QDRANT_COLLECTION)
-                print(f"✅ Indexed {chunks_indexed} chunks from {pdf_file.filename}")
+                # NEW: Summarize PDF content instead of ingesting
+                print(f"🔄 Analyzing and summarizing PDF: {pdf_file.filename}")
                 
-                # Add file metadata (NOT to message content)
+                # Check file size to determine strategy
+                file_size = os.path.getsize(temp_path)
+                size_mb = file_size / (1024 * 1024)
+                
+                if size_mb > 5:  # Large files get chunked summarization
+                    print(f"📊 Large PDF ({size_mb:.1f}MB), using chunked summarization...")
+                    summary_result = summarize_pdf_content(
+                        temp_path, 
+                        max_pages=100,  # Allow more pages for chunked processing
+                        summary_length="medium"
+                    )
+                    
+                    if summary_result.get("error"):
+                        # Check if it's a size threshold error
+                        if "too large for chat processing" in summary_result["error"]:
+                            error_msg = (
+                                f"📄 PDF '{pdf_file.filename}' is too large for chat processing. "
+                                f"Please use the RAG ingestion pipeline instead:\n\n"
+                                f"1. Upload via /api/v1/upload endpoint\n"
+                                f"2. Wait for processing to complete\n"
+                                f"3. Then ask questions about the document\n\n"
+                                f"Details: {summary_result['error']}"
+                            )
+                            raise Exception(error_msg)
+                        else:
+                            raise Exception(f"Summarization failed: {summary_result['error']}")
+                    
+                    pdf_summary = summary_result["summary"]
+                    print(f"✅ Generated chunked summary: {summary_result['summary_chars']} chars from {summary_result['total_chars']} original chars")
+                    
+                elif size_mb > 1:  # Medium files get regular summarization
+                    print(f"📄 Medium PDF ({size_mb:.1f}MB), generating summary...")
+                    summary_result = summarize_pdf_content(
+                        temp_path,
+                        max_pages=50,
+                        summary_length="medium"
+                    )
+                    
+                    if summary_result.get("error"):
+                        # Check if it's a size threshold error
+                        if "too large for chat processing" in summary_result["error"]:
+                            error_msg = (
+                                f"📄 PDF '{pdf_file.filename}' is too large for chat processing. "
+                                f"Please use the RAG ingestion pipeline instead:\n\n"
+                                f"1. Upload via /api/v1/upload endpoint\n"
+                                f"2. Wait for processing to complete\n"
+                                f"3. Then ask questions about the document\n\n"
+                                f"Details: {summary_result['error']}"
+                            )
+                            raise Exception(error_msg)
+                        else:
+                            raise Exception(f"Summarization failed: {summary_result['error']}")
+                    
+                    pdf_summary = summary_result["summary"]
+                    print(f"✅ Generated summary: {summary_result['summary_chars']} chars from {summary_result['total_chars']} original chars")
+                    
+                else:  # Small files get full text extraction
+                    print(f"📄 Small PDF ({size_mb:.1f}MB), extracting full text...")
+                    extract_result = extract_pdf_text_for_chat(temp_path, max_chars=15000)  # Reduced limit
+                    
+                    if extract_result.get("error"):
+                        raise Exception(f"Text extraction failed: {extract_result['error']}")
+                    
+                    pdf_summary = extract_result["text"]
+                    print(f"✅ Extracted text: {extract_result['extracted_chars']} chars from {extract_result['page_count']} pages")
+                
+                # Add file metadata with summary info
+                if size_mb > 5:
+                    processing_type = "chunked_summary"
+                elif size_mb > 1:
+                    processing_type = "summary"
+                else:
+                    processing_type = "full_text"
+                
                 file_info = {
                     "filename": pdf_file.filename,
-                    "saved_as": safe_filename,
-                    "link": permanent_path,
-                    "uploaded_at": datetime.now(timezone.utc).isoformat()
+                    "uploaded_at": datetime.now(timezone.utc).isoformat(),
                 }
                 uploaded_files.append(file_info)
                 
             except Exception as e:
                 print(f"❌ Error processing PDF: {e}")
-                # Add error info to files array instead of message
+                pdf_summary = None
+                # Store error message to return as AI response
+                pdf_error_message = str(e)
+                # Add minimal file info (no error details)
                 file_info = {
                     "filename": pdf_file.filename,
-                    "saved_as": safe_filename,
-                    "path": permanent_path,
-                    "size": os.path.getsize(permanent_path),
-                    "error": str(e),
                     "uploaded_at": datetime.now(timezone.utc).isoformat()
                 }
                 uploaded_files.append(file_info)
+            
+            finally:
+                # Clean up temporary file
+                try:
+                    os.remove(temp_path)
+                    print(f"🗑️ Cleaned up temporary file: {temp_path}")
+                except:
+                    pass  # Ignore cleanup errors
         
         # Add user message to chat history (with uploaded files)
         user_msg_id = run_async(chat_service.add_message(room_id, "user", content, user_id, uploaded_files))
         
-        # Generate AI response using RAG with proper context
-        try:
-            # 1. Get chat history FIRST for context
-            chat_history = run_async(chat_service.get_chat_history(room_id, recency_k=20))
-            logger.info(f"🔍 Chat history: {len(chat_history)} messages")
-            # 2. Retrieve relevant documents
-            print(f"🔍 Searching for: '{content}'")
-            document_hits = retrieve(query=content, top_k=5, score_threshold=0.3)
-            
-            # 3. Build comprehensive context
-            if document_hits:
-                # Rerank for better relevance if we have multiple hits
-                if len(document_hits) > 1:
-                    document_hits = rerank(content, document_hits)
+        # Check for PDF processing error first (skip RAG entirely if error exists)
+        if 'pdf_error_message' in locals():
+            # Return the PDF processing error as the AI response, skip RAG
+            ai_response = pdf_error_message
+            logger.info(f"🚨 PDF processing error detected, skipping RAG: {pdf_error_message[:100]}...")
+        else:
+            # Generate AI response using RAG with proper context (NEW: PDF summary integration)
+            try:
+                # 1. Get chat history FIRST for context
+                chat_history = run_async(chat_service.get_chat_history(room_id, recency_k=20))
+                logger.info(f"🔍 Chat history: {len(chat_history)} messages")
                 
-                # Generate answer with both document and chat context
-                context_prompt = build_context_prompt(content, chat_history, document_hits)
-                ai_response = generate_answer(context_prompt, document_hits)
-            else:
-                # Fallback: Use chat history for context even without documents
-                if len(chat_history) > 1:  # More than just the current message
-                    context_prompt = build_context_prompt(content, chat_history[:-1])  # Exclude the just-added message
-                    # Create a dummy hit for the generator to work
-                    dummy_hit = type('Hit', (), {
-                        'payload': {'content': '基於對話歷史回答', 'page': 'chat_history'}
+                # 2. Retrieve relevant documents from RAG system (still useful for broader context)
+                print(f"🔍 Searching for: '{content}'")
+                document_hits = retrieve(query=content, top_k=5, score_threshold=0.3)
+                
+                # 3. Build comprehensive context with PDF summary priority
+                if pdf_summary:
+                    # NEW: PDF content takes priority
+                    print(f"📄 Using uploaded PDF content for response generation")
+                    
+                    # Still use document hits for additional context if available
+                    if document_hits and len(document_hits) > 1:
+                        document_hits = rerank(content, document_hits)
+                    
+                    # Generate answer with PDF summary as primary source
+                    context_prompt = build_context_prompt(content, chat_history, document_hits, pdf_summary)
+                    
+                    # Create a dummy hit representing the PDF content for the generator
+                    pdf_hit = type('Hit', (), {
+                        'payload': {'content': pdf_summary[:1000], 'page': 'uploaded_pdf'}  # First 1000 chars
                     })()
-                    ai_response = generate_answer(context_prompt, [dummy_hit])
-                elif uploaded_files:
-                    # If a file was just uploaded but no documents found in retrieval, acknowledge the upload
-                    filenames = [f["filename"] for f in uploaded_files]
-                    ai_response = f"我已經成功收到並索引了您上傳的文件：{', '.join(filenames)}。請問您想了解這些文件的什麼內容呢？"
+                    
+                    # Combine PDF hit with document hits for comprehensive context
+                    all_hits = [pdf_hit] + (document_hits[:2] if document_hits else [])
+                    ai_response = generate_answer(context_prompt, all_hits)
+                    
+                elif document_hits:
+                    # Original RAG flow when no PDF is uploaded
+                    if len(document_hits) > 1:
+                        document_hits = rerank(content, document_hits)
+                    
+                    context_prompt = build_context_prompt(content, chat_history, document_hits)
+                    ai_response = generate_answer(context_prompt, document_hits)
+                    
                 else:
-                    ai_response = "你好！我可以幫你分析文件或回答問題。請告訴我你需要什麼幫助，或者上傳一些相關文件。"
-            
-            # Add AI response to chat history
-            ai_msg_id = run_async(chat_service.add_message(room_id, "ai", ai_response, None, []))
-            
-            # Get updated conversation for response (includes the AI response we just added)
-            recent_messages = run_async(chat_service.get_chat_history(room_id, recency_k=20))
-            # Sort messages by timestamp ascending
-            recent_messages.sort(key=lambda x: x["timestamp"])
-            
-            # Get room metadata for response
-            room_data = run_async(chat_service.get_room(room_id))
-            room_title = room_data["room_title"] if room_data else f"Chat Room {room_id[:8]}"
-            created_at = room_data["created_at"] if room_data else (recent_messages[0]["timestamp"] if recent_messages else datetime.now(timezone.utc).isoformat())
-            
-            # Return response with new structure
-            return jsonify({
-                "status": "success",
-                "data": {
-                    "room_id": room_id,
-                    "room_title": room_title,
-                    "createdAt": created_at,
-                    "updatedAt": recent_messages[-1]["timestamp"] if recent_messages else datetime.now(timezone.utc).isoformat(),
-                    "messages": recent_messages
-                }
-            })
-            
-        except Exception as rag_error:
-            logger.error(f"RAG processing error: {rag_error}")
-            
-            # Fallback response
-            fallback_response = "抱歉，我在處理你的請求時遇到了問題。請再試一次。"
-            ai_msg_id = run_async(chat_service.add_message(room_id, "ai", fallback_response, None, []))
-            
-            # Get updated conversation for response (includes the AI response we just added)
-            recent_messages = run_async(chat_service.get_chat_history(room_id, recency_k=20))
-            
-            # Sort messages by timestamp ascending
-            recent_messages.sort(key=lambda x: x["timestamp"])
-            
-            # Get room metadata for response
-            room_data = run_async(chat_service.get_room(room_id))
-            room_title = room_data["room_title"] if room_data else f"Chat Room {room_id[:8]}"
-            created_at = room_data["created_at"] if room_data else (recent_messages[0]["timestamp"] if recent_messages else datetime.now(timezone.utc).isoformat())
-            
-            return jsonify({
-                "status": "success",
-                "data": {
-                    "room_id": room_id,
-                    "room_title": room_title,
-                    "createdAt": created_at,
-                    "updatedAt": recent_messages[-1]["timestamp"] if recent_messages else datetime.now(timezone.utc).isoformat(),
-                    "messages": recent_messages
-                }
-            })
+                    # Fallback: Use chat history for context even without documents
+                    if len(chat_history) > 1:  # More than just the current message
+                        context_prompt = build_context_prompt(content, chat_history[:-1])  # Exclude the just-added message
+                        # Create a dummy hit for the generator to work
+                        dummy_hit = type('Hit', (), {
+                            'payload': {'content': '基於對話歷史回答', 'page': 'chat_history'}
+                        })()
+                        ai_response = generate_answer(context_prompt, [dummy_hit])
+                    elif uploaded_files:
+                        # If a file was just uploaded but processing succeeded
+                        filenames = [f["filename"] for f in uploaded_files]
+                        ai_response = f"我已經成功處理了您上傳的文件：{', '.join(filenames)}。請問您想了解這些文件的什麼內容呢？"
+                    else:
+                         ai_response = "你好！我可以幫你分析文件或回答問題。請告訴我你需要什麼幫助，或者上傳一些相關文件。"
+             
+            except Exception as rag_error:
+                logger.error(f"RAG processing error: {rag_error}")
+                
+                # Fallback response
+                fallback_response = "抱歉，我在處理你的請求時遇到了問題。請再試一次。"
+                ai_response = fallback_response
+         
+        # Add AI response to chat history
+        ai_msg_id = run_async(chat_service.add_message(room_id, "ai", ai_response, None, []))
+        
+        # Get updated conversation for response (includes the AI response we just added)
+        recent_messages = run_async(chat_service.get_chat_history(room_id, recency_k=20))
+        # Sort messages by timestamp ascending
+        recent_messages.sort(key=lambda x: x["timestamp"])
+        
+        # Get room metadata for response
+        room_data = run_async(chat_service.get_room(room_id))
+        room_title = room_data["room_title"] if room_data else f"Chat Room {room_id[:8]}"
+        created_at = room_data["created_at"] if room_data else (recent_messages[0]["timestamp"] if recent_messages else datetime.now(timezone.utc).isoformat())
+        
+        # Return response with new structure
+        return jsonify({
+            "status": "success",
+            "data": {
+                "room_id": room_id,
+                "room_title": room_title,
+                "createdAt": created_at,
+                "updatedAt": recent_messages[-1]["timestamp"] if recent_messages else datetime.now(timezone.utc).isoformat(),
+                "messages": recent_messages
+            }
+        })
     
     except Exception as e:
         logger.error(f"Error in send_message: {e}")
