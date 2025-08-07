@@ -22,8 +22,10 @@ class PromptRewriterLLM:
 
         # A robust prompt template that gives the LLM clear instructions and context
         prompt_template = (
-            "You are an expert query rewriter for a RAG system. Your task is to synthesize the Chat History and the Current User Query into a single, self-contained, and highly specific query that is optimal for document retrieval.\n"
-            "Analyze the conversation to resolve all contextual dependencies, such as pronouns (e.g., 'it', 'that'), ambiguous references, and follow-up questions. The final rewritten query must be perfectly understandable on its own.\n"
+            "You are an expert query rewriter for a RAG system.\n"
+            "Your task is to synthesize the Chat History and the Current User Query into a single, self-contained, and highly specific query that is optimal for document retrieval.\n"
+            "Analyze the conversation to resolve all contextual dependencies, such as pronouns (e.g., 'it', 'that'), ambiguous references, and follow-up questions.\n"
+            "The final rewritten query must be perfectly understandable on its own.\n"
             "Response with the rewritten Query only without any explaination.\n"
             "### Chat History\n"
             f"{history_str}\n"
