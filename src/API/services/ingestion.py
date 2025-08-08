@@ -6,6 +6,7 @@ Integrates with existing RAG indexer for document processing.
 """
 
 import asyncio
+import logging
 import os
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -19,6 +20,7 @@ import sys
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 from src.rag.indexing.indexer import index_pdf
 from src.config import QDRANT_COLLECTION
+from werkzeug.utils import secure_filename
 
 
 class IngestionProgress:
@@ -110,31 +112,36 @@ class AsyncIngestionService:
     
     def __init__(self, upload_dir: str = "data/uploads"):
         self.upload_dir = upload_dir
-        self.executor = ThreadPoolExecutor(max_workers=2)  # Limit concurrent ingestions
+        # Allow limited concurrency; user will pause LLM during embedding
+        self.executor = ThreadPoolExecutor(max_workers=2)
         self.progress = IngestionProgress()
         os.makedirs(upload_dir, exist_ok=True)
+        self.logger = logging.getLogger(__name__)
     
-    async def save_uploaded_files(self, files: list) -> tuple[list, str]:
-        """Save uploaded files and return paths and task ID"""
+    def save_uploaded_files_sync(self, files: list) -> tuple[list, str]:
+        """Save uploaded files synchronously and return file infos and task ID.
+
+        Returns a list of dicts: { 'path': saved_path, 'original_filename': original, 'preferred_doc_id': original_without_ext }
+        """
         task_id = f"ingest-{uuid.uuid4()}"
-        saved_paths = []
-        
+        saved_files_info = []
         for file in files:
-            # Generate unique filename
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"{timestamp}_{file.filename}"
+            original_filename = file.filename or f"upload_{uuid.uuid4()}.pdf"
+            # Save with a safe name on disk, but keep original filename for doc_id
+            safe_name = secure_filename(original_filename) or f"upload_{uuid.uuid4()}.pdf"
+            filename = f"{timestamp}_{safe_name}"
             file_path = os.path.join(self.upload_dir, filename)
-            
-            # Save file
-            await asyncio.get_event_loop().run_in_executor(
-                self.executor,
-                lambda: file.save(file_path)
-            )
-            saved_paths.append(file_path)
-        
-        return saved_paths, task_id
+            # Save file synchronously
+            file.save(file_path)
+            saved_files_info.append({
+                "path": file_path,
+                "original_filename": original_filename,
+                "preferred_doc_id": os.path.splitext(original_filename)[0],
+            })
+        return saved_files_info, task_id
     
-    def _process_single_pdf(self, file_path: str, task_id: str, file_index: int, progress_callback: Callable = None) -> int:
+    def _process_single_pdf(self, file_path: str, task_id: str, file_index: int, progress_callback: Callable = None, original_filename: str | None = None, preferred_doc_id: str | None = None) -> int:
         """Process a single PDF file with progress updates"""
         try:
             filename = os.path.basename(file_path)
@@ -150,15 +157,19 @@ class AsyncIngestionService:
             if progress_callback:
                 progress_callback(task_id, f"Starting {filename}")
             
-            # Process the PDF using existing indexer
-            chunks_indexed = index_pdf(file_path, collection_name=QDRANT_COLLECTION)
+            # Process the PDF using existing indexer (pass through preferred doc_id to preserve user-visible name)
+            chunks_indexed = index_pdf(
+                file_path,
+                collection_name=QDRANT_COLLECTION,
+                doc_id=preferred_doc_id
+            )
             
             # Update progress
             self.progress.update_task(
                 task_id,
                 files_processed=file_index + 1,
                 chunks_indexed=self.progress.get_task(task_id).get("chunks_indexed", 0) + chunks_indexed,
-                message=f"Completed {filename} ({chunks_indexed} chunks)"
+                message=f"Completed {original_filename or filename} ({chunks_indexed} chunks)"
             )
             
             if progress_callback:
@@ -173,40 +184,44 @@ class AsyncIngestionService:
                 progress_callback(task_id, error_msg)
             raise
     
-    async def _ingest_files_async(self, file_paths: list, task_id: str, progress_callback: Callable = None):
+    async def _ingest_files_async(self, files_info: list, task_id: str, progress_callback: Callable = None):
         """Async wrapper for file ingestion"""
         try:
             loop = asyncio.get_event_loop()
             total_chunks = 0
-            
-            for i, file_path in enumerate(file_paths):
+
+            for i, info in enumerate(files_info):
+                file_path = info["path"]
+                original_filename = info["original_filename"]
+                preferred_doc_id = info["preferred_doc_id"]
                 # Calculate progress percentage
-                progress_pct = int((i / len(file_paths)) * 100)
+                progress_pct = int((i / len(files_info)) * 100)
                 self.progress.update_task(task_id, progress=progress_pct)
-                
+
                 # Process file
                 chunks = await loop.run_in_executor(
                     self.executor,
                     self._process_single_pdf,
-                    file_path, task_id, i, progress_callback
+                    file_path, task_id, i, progress_callback, original_filename, preferred_doc_id
                 )
                 total_chunks += chunks
-                
-                            # Clean up uploaded file
-            try:
-                os.remove(file_path)
-            except:
-                pass  # Ignore cleanup errors
+
+                # Clean up uploaded file after processing
+                try:
+                    os.remove(file_path)
+                except Exception as cleanup_err:
+                    # Non-fatal cleanup errors
+                    self.logger.debug(f"Cleanup failed for {file_path}: {cleanup_err}")
             
             # Add document IDs to query parser for future queries
             try:
                 from src.rag.retriever import add_new_doc_id_to_parser
-                for file_path in file_paths:
-                    doc_id = os.path.basename(file_path)
+                for info in files_info:
+                    doc_id = info["preferred_doc_id"]
                     add_new_doc_id_to_parser(doc_id)
-                    logger.info(f"Added '{doc_id}' to query parser vocabulary")
+                    self.logger.info(f"Added '{doc_id}' to query parser vocabulary")
             except Exception as e:
-                logger.warning(f"Failed to add document IDs to query parser: {e}")
+                self.logger.warning(f"Failed to add document IDs to query parser: {e}")
             
             # Mark as completed
             self.progress.complete_task(task_id, success=True)
@@ -221,19 +236,32 @@ class AsyncIngestionService:
             if progress_callback:
                 progress_callback(task_id, f"Ingestion failed: {str(e)}")
     
-    async def start_ingestion(self, files: list, progress_callback: Callable = None) -> str:
-        """Start PDF ingestion process with progress tracking"""
-        
-        # Save files and create task
-        file_paths, task_id = await self.save_uploaded_files(files)
-        file_names = [os.path.basename(path) for path in file_paths]
-        
+    def _run_background(self, files_info: list, task_id: str, progress_callback: Callable = None):
+        """Run the async ingest in a dedicated event loop thread"""
+        try:
+            asyncio.run(self._ingest_files_async(files_info, task_id, progress_callback))
+        except Exception as e:
+            # Ensure task is marked failed if top-level error occurs
+            self.progress.complete_task(task_id, success=False, error=str(e))
+            if progress_callback:
+                progress_callback(task_id, f"Ingestion failed: {str(e)}")
+
+    def start_ingestion(self, files: list, progress_callback: Callable = None) -> str:
+        """Start PDF ingestion process with progress tracking (synchronous kickoff)."""
+        # Save files synchronously and create task
+        files_info, task_id = self.save_uploaded_files_sync(files)
+        file_names = [info["original_filename"] for info in files_info]
+
         # Create progress tracking
-        self.progress.create_task(task_id, len(file_paths), file_names)
-        
-        # Start ingestion in background
-        asyncio.create_task(self._ingest_files_async(file_paths, task_id, progress_callback))
-        
+        self.progress.create_task(task_id, len(files_info), file_names)
+
+        # Start background thread to run async ingestion
+        threading.Thread(
+            target=self._run_background,
+            args=(files_info, task_id, progress_callback),
+            daemon=True
+        ).start()
+
         return task_id
     
     def get_ingestion_status(self, task_id: str) -> Optional[dict]:

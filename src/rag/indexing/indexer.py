@@ -72,7 +72,7 @@ def init_collection(collection_name: str = QDRANT_COLLECTION) -> None:
     ensure_indexes_exist(collection_name)
 
 
-def index_pdf(pdf_path: str, collection_name: str = QDRANT_COLLECTION) -> int:
+def index_pdf(pdf_path: str, collection_name: str = QDRANT_COLLECTION, doc_id: str | None = None) -> int:
     """
     1) Extract and build enhanced nodes (paragraphs + tables)
     2) Chunk paragraphs if needed (tables are already row-based)
@@ -83,7 +83,9 @@ def index_pdf(pdf_path: str, collection_name: str = QDRANT_COLLECTION) -> int:
     
     nodes = build_page_nodes(pdf_path)  # Enhanced nodes with tables
     points = []
-    doc_id = os.path.splitext(os.path.basename(pdf_path))[0]
+    # Prefer provided doc_id (e.g., original filename without extension) to preserve user-visible name
+    if not doc_id:
+        doc_id = os.path.splitext(os.path.basename(pdf_path))[0]
     
     # Collect all texts for batch embedding
     all_texts = []
@@ -129,13 +131,10 @@ def index_pdf(pdf_path: str, collection_name: str = QDRANT_COLLECTION) -> int:
             
             text_metadata.append(metadata)
     
-    # Batch embed all texts at once (MUCH FASTER!)
+    # Batch embed all texts at once (balanced for speed/memory)
     print(f"🧠 Generating embeddings for {len(all_texts)} texts...")
-    
-    # Process in smaller batches for better memory management
-    batch_size = 100  # Process 100 texts at a time
     vectors = []
-    
+    batch_size = 100
     for i in range(0, len(all_texts), batch_size):
         batch_texts = all_texts[i:i + batch_size]
         batch_vectors = embed(batch_texts)

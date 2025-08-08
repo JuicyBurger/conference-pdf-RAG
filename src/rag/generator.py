@@ -5,6 +5,7 @@ import re
 import json
 import uuid
 import logging
+import os
 
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import Filter, FieldCondition, MatchValue
@@ -29,12 +30,13 @@ def generate_answer(query: str, hits) -> str:
     - query: the user's question
     - hits: list of ScoredPoint from Qdrant
     """
-    # Handle empty hits
+    # Handle empty or weak hits: ask for clarification instead of fabricating
     if not hits:
-        return "抱歉，我沒有找到相關的資訊來回答您的問題。"
+        return "我目前沒有足夠的文件證據來回答。可以提供更具體的主題、關鍵詞或頁碼嗎？"
     
     # Filter valid hits with proper payload structure
     valid_hits = []
+    top_score_observed = 0.0
     for h in hits:
         try:
             # Check for both 'text' and 'content' fields (different indexing methods)
@@ -60,6 +62,10 @@ def generate_answer(query: str, hits) -> str:
                             }
                         })()
                         valid_hits.append(normalized_hit)
+                        try:
+                            top_score_observed = max(top_score_observed, float(getattr(h, 'score', 0.0)))
+                        except Exception:
+                            pass
                     else:
                         print(f"⚠️ Skipping hit with empty {text_field}: {getattr(h, 'id', 'unknown')}")
                 else:
@@ -73,16 +79,30 @@ def generate_answer(query: str, hits) -> str:
             continue
     
     if not valid_hits:
-        return "抱歉，我沒有找到相關的資訊來回答您的問題。"
+        return "我目前沒有足夠的文件證據來回答。可以提供更具體的主題、關鍵詞或頁碼嗎？"
+
+    # Abstain if evidence is weak, unless disabled for demo (shares kill-switch with query signal)
+    if os.getenv("DISABLE_QUERY_SIGNAL", "0") != "1":
+        if top_score_observed < 0.4:
+            return "目前檢索到的內容相關性不足。請提供更明確的關鍵詞、頁碼或文件名稱以便查找。"
     
+    # Include doc_id in context to reduce invented labels like "Document 1"
     context = "\n\n".join(
-        f"[第{h.payload['page']}頁] {h.payload['text']}" for h in valid_hits
+        f"[{h.payload.get('doc_id', 'unknown')} 第{h.payload['page']}頁] {h.payload['text']}" for h in valid_hits
     )
     system_prompt = (
         "你是投資人簡報助理。"
-        "以下是文件內容，請根據上下文，用繁體中文回答並標註出處頁碼。"
+        "僅根據提供的節錄內容回答；若內容不足或無關，請禮貌要求使用者提供更多線索。"
+        "回答時務必使用繁體中文；若引用，僅標註實際出現於節錄中的 doc_id 與頁碼，切勿臆測。"
     )
-    user_prompt = f"內容：\n{context}\n\n請問：{query}\n回答："
+    user_prompt = (
+        f"以下是可用的文件節錄（可能為零或多段）：\n{context}\n\n"
+        f"問題：{query}\n"
+        "要求：\n"
+        "- 僅在節錄能直接支持答案時作答，並標註 [doc_id 第X頁]；\n"
+        "- 若節錄不足或無關，請直接回覆需要更明確的主題、關鍵詞或頁碼（不要臆測內容）。\n"
+        "回答："
+    )
 
     return LLM(llm_client, default_model, system_prompt, user_prompt, raw=True)
 

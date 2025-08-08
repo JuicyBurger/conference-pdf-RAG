@@ -3,7 +3,7 @@
 import os
 import fitz  # PyMuPDF
 import pandas as pd
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 from rapidfuzz import fuzz, process
 from .node_builder import paragraphs_to_nodes, table_to_nodes, clean_text_for_comparison
 
@@ -15,24 +15,95 @@ except ImportError:
     CAMELOT_AVAILABLE = False
     print("⚠️ Camelot not available. Table extraction will be skipped.")
 
+def _detect_common_headers_footers(doc: fitz.Document, top_margin: float = 60.0, bottom_margin: float = 60.0) -> Tuple[set, set]:
+    """Detect repeated header/footer lines that appear on many pages and should be stripped."""
+    from collections import Counter
+    head_cnt: Counter = Counter()
+    foot_cnt: Counter = Counter()
+    for pno in range(len(doc)):
+        page = doc.load_page(pno)
+        text_dict = page.get_text("dict")
+        height = page.rect.height
+        for block in text_dict.get("blocks", []):
+            if block.get("type") != 0:
+                continue
+            for line in block.get("lines", []):
+                span_text = "".join(span.get("text", "") for span in line.get("spans", []))
+                if not span_text.strip():
+                    continue
+                # Compute line y0 using span bbox values
+                y_candidates = []
+                for span in line.get("spans", []):
+                    bbox = span.get("bbox")
+                    if isinstance(bbox, (list, tuple)) and len(bbox) >= 2:
+                        y_candidates.append(bbox[1])
+                y0 = min(y_candidates) if y_candidates else 0
+                # Rough top/bottom detection using line bbox approximations
+                if y0 <= top_margin:
+                    head_cnt[span_text.strip()] += 1
+                if y0 >= (height - bottom_margin):
+                    foot_cnt[span_text.strip()] += 1
+    # Keep strings that appear on > 70% of pages
+    threshold = max(2, int(len(doc) * 0.7))
+    headers = {s for s, c in head_cnt.items() if c >= threshold}
+    footers = {s for s, c in foot_cnt.items() if c >= threshold}
+    return headers, footers
+
+
+def _reconstruct_paragraph_from_dict(page: fitz.Page, headers: set, footers: set) -> str:
+    """Reconstruct a cleaner paragraph string from PyMuPDF dict blocks, skipping common headers/footers."""
+    blocks = page.get_text("dict").get("blocks", [])
+    parts: List[str] = []
+    last_y = None
+    for block in blocks:
+        if block.get("type") != 0:
+            continue
+        for line in block.get("lines", []):
+            text = "".join(span.get("text", "") for span in line.get("spans", []))
+            text = text.strip()
+            if not text:
+                continue
+            # Skip repetitive headers/footers
+            if text in headers or text in footers:
+                continue
+            # Simple join heuristic: if vertical gap small, add space; otherwise newline (later collapsed)
+            y_candidates = []
+            for span in line.get("spans", []):
+                bbox = span.get("bbox")
+                if isinstance(bbox, (list, tuple)) and len(bbox) >= 2:
+                    y_candidates.append(bbox[1])
+            y = min(y_candidates) if y_candidates else None
+            sep = " "
+            if last_y is not None and y is not None and abs(y - last_y) > 18:  # new paragraph-ish
+                sep = "\n"
+            # Fix hyphenated breaks (mainly Western text); for CJK we simply concatenate
+            if parts:
+                parts.append(sep)
+            parts.append(text)
+            last_y = y
+    # Collapse whitespace but keep sentence boundaries somewhat
+    merged = " ".join(s for s in " ".join(parts).split())
+    return merged
+
+
 def extract_text_pages(pdf_path: str) -> List[Dict[str, Any]]:
     """
-    Returns a list of {"page": int, "text": str} for each page,
-    collapsing intra-page linebreaks into spaces.
+    Returns a list of {"page": int, "text": str} for each page using block-aware reconstruction,
+    skipping repetitive headers/footers and reducing PyMuPDF line noise.
     """
-    pages = []
+    pages: List[Dict[str, Any]] = []
     with fitz.open(pdf_path) as doc:
         total_pages = len(doc)
         print(f"📄 Extracting text from {total_pages} pages...")
-        
+        headers, footers = _detect_common_headers_footers(doc)
+        if headers:
+            print(f"🔖 Detected headers to strip: {list(headers)[:3]}{'...' if len(headers)>3 else ''}")
+        if footers:
+            print(f"🔖 Detected footers to strip: {list(footers)[:3]}{'...' if len(footers)>3 else ''}")
         for pno in range(total_pages):
             page = doc.load_page(pno)
-            # get all text in reading order
-            raw = page.get_text("text")
-            # collapse lines
-            lines = [ln.strip() for ln in raw.split("\n") if ln.strip()]
-            merged = " ".join(lines)
-            pages.append({"page": pno + 1, "text": merged})
+            text = _reconstruct_paragraph_from_dict(page, headers, footers)
+            pages.append({"page": pno + 1, "text": text})
     return pages
 
 def extract_image_blocks(pdf_path: str, output_dir: str = "extracted_images") -> List[Dict[str, Any]]:
@@ -136,12 +207,19 @@ def extract_tables_per_page(pdf_path: str) -> Dict[int, List[pd.DataFrame]]:
     if not CAMELOT_AVAILABLE:
         return {}
     
-    tables_by_page = {}
+    tables_by_page: Dict[int, List[pd.DataFrame]] = {}
     
     try:
-        print("📊 Extracting tables using Camelot...")
-        # Read all tables from PDF using lattice method
-        tables = camelot.read_pdf(pdf_path, flavor='lattice', pages='all')
+        print("📊 Extracting tables using Camelot (lattice)...")
+        # Detect text-based pages only to avoid image-based warnings and wasted work
+        text_pages: List[int] = []
+        with fitz.open(pdf_path) as doc:
+            for pno in range(len(doc)):
+                raw = doc.load_page(pno).get_text("text").strip()
+                if raw:
+                    text_pages.append(pno + 1)  # 1-based
+        page_spec = 'all' if not text_pages else ",".join(str(i) for i in text_pages)
+        tables = camelot.read_pdf(pdf_path, flavor='lattice', pages=page_spec)
         
         print(f"📊 Processing {len(tables)} tables...")
         for table in tables:

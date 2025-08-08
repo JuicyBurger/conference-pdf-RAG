@@ -35,8 +35,13 @@ def chat_interface():
             # Process the question
             print("🔍 Searching documents...")
             
+            # NEW: Rewrite query for better retrieval (if we had chat history)
+            # For now, use original query since this is a simple interface
+            # In the future, we could add chat history tracking here
+            rewritten_query = question  # Placeholder for future enhancement
+            
             # Retrieve relevant chunks with optimized parameters
-            hits = retrieve(query=question, top_k=5, score_threshold=0.3)
+            hits = retrieve(query=rewritten_query, top_k=5, score_threshold=0.3)
             if not hits:
                 print("❌ No relevant documents found (try lowering search criteria)")
                 continue

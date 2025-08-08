@@ -136,16 +136,21 @@ class QueryParser:
         """Extract document IDs with fuzzy matching support."""
         doc_ids = []
         
-        # Direct pattern matching for common document ID formats
+        # Direct pattern matching for document ID formats
+        # 1) Full PDF filename with Chinese/ASCII, allowing spaces, hyphens, parentheses, and Chinese parentheses
         patterns = [
-            r'([A-Za-z0-9]+Q[1-4][A-Za-z0-9]*[^\\s]*)',  # Quarterly reports
-            r'(\d{4}年?[第]?[一二三四1-4][季度]?[A-Za-z0-9]*[^\\s]*)',  # Year-based reports
-            r'([\u4e00-\u9fffA-Za-z0-9_\s]+\.pdf)(?=[,\s]|$)',  # PDF filenames with Chinese characters
-            r'([A-Za-z]{2,}[0-9]{2,}[A-Za-z0-9]*)(?=[,\s]|$)',  # Mixed alphanumeric codes - must be followed by comma, space, or end
+            r'([\u4e00-\u9fffA-Za-z0-9_\s\-\(\)（）]+\.pdf)(?=[,\s]|$)',
+            # 2) Same as above but without requiring .pdf (some users omit extension)
+            r'([\u4e00-\u9fffA-Za-z0-9_\s\-\(\)（）]+)(?=\s*文件|\s*檔案|\s*$)',
+            # 3) Common quarterly formats
+            r'([A-Za-z0-9]+Q[1-4][A-Za-z0-9]*)',
+            r'(\d{4}年[Q第]?[一二三四1-4][季度]?[A-Za-z0-9（）\-\s]*)',
+            # 4) Mixed alphanumeric codes
+            r'([A-Za-z]{2,}[0-9]{2,}[A-Za-z0-9]*)',
         ]
-        
-        # Additional pattern for better PDF filename extraction
-        pdf_pattern = r'([\u4e00-\u9fffA-Za-z0-9_\s]+\.pdf)'
+
+        # Additional pattern for better PDF filename extraction (include parentheses variants)
+        pdf_pattern = r'([\u4e00-\u9fffA-Za-z0-9_\s\-\(\)（）]+\.pdf)'
         pdf_matches = re.findall(pdf_pattern, text)
         for match in pdf_matches:
             # Clean up the match to remove trailing text
@@ -315,8 +320,8 @@ class QueryParser:
                     
                     # Additional cleaning: remove text after the last .pdf
                     if '.pdf' in cleaned_id:
-                        # Find the last occurrence of .pdf and keep only up to that point
-                        pdf_end = cleaned_id.rfind('.pdf') + 4  # +4 to include '.pdf'
+                        # Keep up to the exact '.pdf'
+                        pdf_end = cleaned_id.rfind('.pdf') + 4
                         cleaned_id = cleaned_id[:pdf_end]
                     
                     # Remove any remaining quotes or extra punctuation
@@ -324,7 +329,16 @@ class QueryParser:
                     
                     # Remove .pdf extension for matching against Qdrant doc_ids
                     if cleaned_id.endswith('.pdf'):
-                        cleaned_id = cleaned_id[:-4]  # Remove .pdf extension
+                        cleaned_id = cleaned_id[:-4]
+
+                    # Final trim of stray ')' or '）' if dangling at end only with 1 char
+                    cleaned_id = cleaned_id.rstrip()
+                    if cleaned_id.endswith(').pdf') or cleaned_id.endswith('）.pdf'):
+                        # Already handled in pdf strip; nothing extra
+                        pass
+                    elif cleaned_id.endswith(')') or cleaned_id.endswith('）'):
+                        # Allow closing parenthesis in doc_id (Qdrant stores without '.pdf' but with parentheses)
+                        pass
                     
                     if cleaned_id and len(cleaned_id) > 4:  # Minimum reasonable length
                         valid_doc_ids.append(cleaned_id)

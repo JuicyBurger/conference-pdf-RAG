@@ -62,8 +62,9 @@ def build_context_prompt(user_message: str, chat_history: list, document_hits: l
     doc_context = ""
     if document_hits:
         doc_context = "Relevant documents from knowledge base:\n"
-        for i, hit in enumerate(document_hits[:3], 1):  # Top 3 documents
-            content = hit.payload.get('content', '')[:500]  # First 500 chars
+        for i, hit in enumerate(document_hits[:4], 1):  # Top 4 documents
+            # Support both 'content' and 'text' payload keys
+            content = hit.payload.get('content') or hit.payload.get('text', '')
             page = hit.payload.get('page', 'unknown')
             doc_context += f"Document {i} (Page {page}): {content}...\n"
         doc_context += "\n"
@@ -90,6 +91,9 @@ def send_message():
             # Handle multipart form data with file upload
             content = request.form.get('content', '').strip()
             room_id = request.form.get('room_id')
+            # Normalize string placeholders to None so we auto-create a room
+            if isinstance(room_id, str) and room_id.strip().lower() in {"null", "none", "undefined", ""}:
+                room_id = None
             user_id = request.form.get('user_id')
             
             if not content:
@@ -115,6 +119,9 @@ def send_message():
                 return jsonify(validation_error_response("body", "Request body is required")), 400
             
             room_id = data.get('room_id')
+            # Normalize string placeholders to None so we auto-create a room
+            if isinstance(room_id, str) and room_id.strip().lower() in {"null", "none", "undefined", ""}:
+                room_id = None
             content = data.get('content', '').strip()
             user_id = data.get('user_id')
             files = data.get('files', [])
@@ -282,10 +289,36 @@ def send_message():
                 chat_history = run_async(chat_service.get_chat_history(room_id, recency_k=20))
                 logger.info(f"🔍 Chat history: {len(chat_history)} messages")
                 
-                # 2. Retrieve relevant documents from RAG system (still useful for broader context)
-                print(f"🔍 Searching for: '{content}'")
-                document_hits = retrieve(query=content, top_k=5, score_threshold=0.3)
-                
+                # 2. Parse explicit constraints for doc_id/pages to preserve intent
+                from src.rag.retriever import parse_constraints_for_text
+                _cleaned, _constraints = parse_constraints_for_text(content)
+                has_explicit_constraints = bool(
+                    (_constraints.get('doc_ids') and len(_constraints['doc_ids']) > 0) or
+                    (_constraints.get('pages') and len(_constraints['pages']) > 0)
+                )
+                # 2b. Rewrite query using chat history for better retrieval
+                from src.rag.llm_query_rewriter import PromptRewriterLLM
+                rewriter = PromptRewriterLLM()
+                rewritten_query = rewriter.rewrite(content, chat_history)
+                logger.info(f"🔄 Original query: '{content}'")
+                logger.info(f"🔄 Rewritten query: '{rewritten_query}'")
+            
+                # 3. Retrieve relevant documents from RAG system using rewritten query
+                # Preserve explicit constraints from original content (e.g., doc_id) to avoid losing them via rewrite
+                from src.rag.retriever import parse_constraints_for_text
+                _orig_cleaned, orig_constraints = parse_constraints_for_text(content)
+                constraints_override = orig_constraints if (orig_constraints.get('doc_ids') or orig_constraints.get('pages') or orig_constraints.get('content_types')) else None
+                print(f"🔍 Searching for: '{rewritten_query}'")
+                # If we have explicit constraints from the original content (e.g., doc_id), prefer the original content as search basis
+                search_query_override = content if constraints_override else None
+                document_hits = retrieve(
+                    query=rewritten_query,
+                    top_k=5,
+                    score_threshold=0.3,
+                    constraints_override=constraints_override,
+                    search_query_override=search_query_override,
+                )
+            
                 # 3. Build comprehensive context with PDF summary priority
                 if pdf_summary:
                     # NEW: PDF content takes priority
@@ -316,20 +349,8 @@ def send_message():
                     ai_response = generate_answer(context_prompt, document_hits)
                     
                 else:
-                    # Fallback: Use chat history for context even without documents
-                    if len(chat_history) > 1:  # More than just the current message
-                        context_prompt = build_context_prompt(content, chat_history[:-1])  # Exclude the just-added message
-                        # Create a dummy hit for the generator to work
-                        dummy_hit = type('Hit', (), {
-                            'payload': {'content': '基於對話歷史回答', 'page': 'chat_history'}
-                        })()
-                        ai_response = generate_answer(context_prompt, [dummy_hit])
-                    elif uploaded_files:
-                        # If a file was just uploaded but processing succeeded
-                        filenames = [f["filename"] for f in uploaded_files]
-                        ai_response = f"我已經成功處理了您上傳的文件：{', '.join(filenames)}。請問您想了解這些文件的什麼內容呢？"
-                    else:
-                         ai_response = "你好！我可以幫你分析文件或回答問題。請告訴我你需要什麼幫助，或者上傳一些相關文件。"
+                    # Ask for clarification instead of generating with weak evidence
+                    ai_response = "我目前沒有足夠的文件證據來回答。可以提供更具體的主題、關鍵詞或頁碼嗎？"
              
             except Exception as rag_error:
                 logger.error(f"RAG processing error: {rag_error}")

@@ -192,7 +192,7 @@ def _generate_summary_with_llm(
 2. 語言：繁體中文
 3. 重點：{config['focus']}
 4. 結構：{config['structure']}
-5. 保持客觀、準確，不添加文件中沒有的資訊
+ 5. 保持客觀、準確，不添加文件中沒有的資訊；不得臆測或編造數字、日期、金額等事實
 6. 如果是財務或商業文件，請特別關注數字、趨勢、重要決策
 7. 使用清晰的段落結構，便於閱讀
 
@@ -381,7 +381,8 @@ def _generate_summary_with_llm_fast(
     """
     try:
         # Ultra-fast system prompt (minimal)
-        system_prompt = """你是文件摘要專家。請用繁體中文生成簡潔摘要，重點突出關鍵信息。"""
+        system_prompt = """你是文件摘要專家。請用繁體中文生成簡潔摘要，重點突出關鍵信息。
+嚴禁編造或修改事實性資料（數字、日期、金額、比例），若原文未明示則以「未明示」表示。"""
         
         user_prompt = f"""請為以下內容生成簡潔摘要：
 

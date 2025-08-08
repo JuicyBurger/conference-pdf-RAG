@@ -11,6 +11,7 @@ from .rag.retriever    import retrieve, get_all_doc_ids
 from .models.reranker  import rerank
 from .rag.generator    import generate_answer, generate_qa_pairs_for_doc
 from .rag.suggestions  import generate_suggestions_for_doc, batch_generate_suggestions
+from .data.pdf_ingestor import extract_text_pages, extract_tables_per_page, build_page_nodes
 
 
 
@@ -94,6 +95,36 @@ def main():
     g.add_argument("-o", "--output", default="qa_pairs.json",
                 help="JSON file to write the results")
     g.set_defaults(func=cmd_qa_generate)
+    
+    # Debug extract command: dump extraction output to test_results JSON
+    def cmd_debug_extract(args):
+        pdf_path = args.pdf
+        out = {
+            "meta": {
+                "pdf": os.path.basename(pdf_path),
+            }
+        }
+        pages = extract_text_pages(pdf_path)
+        tables = extract_tables_per_page(pdf_path)
+        nodes = build_page_nodes(pdf_path)
+
+        out["pages"] = pages
+        out["tables"] = {}
+        for k, dfs in tables.items():
+            # Convert first few rows to plain lists for JSON compactness
+            out["tables"][str(k)] = [list(map(str, row)) for row in dfs[0].values.tolist()] if dfs else []
+        out["nodes"] = nodes
+
+        os.makedirs("test_results", exist_ok=True)
+        fname = os.path.join("test_results", f"extract_{os.path.basename(pdf_path)}.json")
+        with open(fname, "w", encoding="utf-8") as f:
+            json.dump(out, f, ensure_ascii=False, indent=2)
+        print(f"✅ Saved extraction debug to {fname}")
+        print(f"Pages: {len(pages)} | Tables(pages): {len(tables)} | Nodes: {len(nodes)}")
+
+    dbg = sub.add_parser("debug-extract", help="Extract text/tables/nodes and save JSON to test_results/")
+    dbg.add_argument("pdf", help="Path to PDF")
+    dbg.set_defaults(func=cmd_debug_extract)
     
 
     
