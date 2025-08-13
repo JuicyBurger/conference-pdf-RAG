@@ -35,6 +35,8 @@ def ensure_indexes_exist(collection_name: str = QDRANT_COLLECTION) -> None:
         ("page", "integer", "Page number filtering"),
         ("type", "keyword", "Content type filtering"),
         ("text", "text", "Full-text search"),
+        ("room_id", "keyword", "Room scoping for chat uploads"),
+        ("scope", "keyword", "Data scope flag: chat/global/graph"),
     ]
     
     for field_name, field_schema, description in required_indexes:
@@ -72,20 +74,14 @@ def init_collection(collection_name: str = QDRANT_COLLECTION) -> None:
     ensure_indexes_exist(collection_name)
 
 
-def index_pdf(pdf_path: str, collection_name: str = QDRANT_COLLECTION, doc_id: str | None = None) -> int:
-    """
-    1) Extract and build enhanced nodes (paragraphs + tables)
-    2) Chunk paragraphs if needed (tables are already row-based)
-    3) Embed & upsert with enhanced metadata
-    """
+def index_nodes(nodes: List[dict], collection_name: str = QDRANT_COLLECTION, doc_id: str | None = None, extra_payload: dict | None = None) -> int:
+    """Index pre-extracted nodes (avoid re-reading the PDF)."""
     # Ensure indexes exist before indexing
     ensure_indexes_exist(collection_name)
-    
-    nodes = build_page_nodes(pdf_path)  # Enhanced nodes with tables
+
     points = []
-    # Prefer provided doc_id (e.g., original filename without extension) to preserve user-visible name
     if not doc_id:
-        doc_id = os.path.splitext(os.path.basename(pdf_path))[0]
+        raise ValueError("doc_id is required when indexing pre-extracted nodes")
     
     # Collect all texts for batch embedding
     all_texts = []
@@ -149,6 +145,14 @@ def index_pdf(pdf_path: str, collection_name: str = QDRANT_COLLECTION, doc_id: s
             "type": metadata["type"],
             "text": metadata["text"],
         }
+        if extra_payload:
+            try:
+                # Merge but do not overwrite core fields unintentionally
+                for k, v in extra_payload.items():
+                    if k not in payload:
+                        payload[k] = v
+            except Exception:
+                pass
         
         # Add type-specific fields
         if metadata["type"] == "paragraph":
@@ -231,7 +235,7 @@ def index_pdf(pdf_path: str, collection_name: str = QDRANT_COLLECTION, doc_id: s
                     print(f"❌ Batch {batch_num} failed after {max_retries} attempts: {e}")
                     raise
     
-    print(f"✅ Successfully indexed {total_indexed}/{len(points)} chunks from '{pdf_path}'")
+    print(f"✅ Successfully indexed {total_indexed}/{len(points)} chunks for doc_id '{doc_id}'")
     
     # Add the document ID to the query parser for future queries
     try:
@@ -265,6 +269,20 @@ def index_pdf(pdf_path: str, collection_name: str = QDRANT_COLLECTION, doc_id: s
     return total_indexed
 
 
+def index_pdf(pdf_path: str, collection_name: str = QDRANT_COLLECTION, doc_id: str | None = None, extra_payload: dict | None = None) -> int:
+    """
+    Backwards-compatible helper that extracts nodes, then delegates to index_nodes.
+    """
+    # Ensure indexes exist before indexing
+    ensure_indexes_exist(collection_name)
+
+    nodes = build_page_nodes(pdf_path)
+    # Prefer provided doc_id (e.g., original filename without extension)
+    if not doc_id:
+        doc_id = os.path.splitext(os.path.basename(pdf_path))[0]
+    return index_nodes(nodes, collection_name=collection_name, doc_id=doc_id, extra_payload=extra_payload)
+
+
 def index_pdfs(
     pdf_paths: List[str],
     collection_name: str = QDRANT_COLLECTION,
@@ -292,6 +310,49 @@ def index_pdfs(
         
     print(f"🎉 Done! Total chunks indexed: {total}")
 
+
+def index_text_payloads(
+    payloads: list[dict],
+    collection_name: str = QDRANT_COLLECTION,
+    batch_size: int = 200
+) -> int:
+    """Index arbitrary text payloads into Qdrant.
+
+    Each payload must contain at least: { 'text': str }
+    Any additional keys are stored in the payload.
+    Returns number of points indexed.
+    """
+    texts = []
+    metas = []
+    for p in payloads:
+        t = (p or {}).get("text", "")
+        if not t:
+            continue
+        texts.append(t)
+        metas.append({k: v for k, v in p.items() if k != "text"})
+
+    if not texts:
+        return 0
+
+    vectors = []
+    for i in range(0, len(texts), 100):
+        vectors.extend(embed(texts[i:i+100]))
+
+    points = []
+    for i, (text, meta) in enumerate(zip(texts, metas)):
+        payload = {**meta, "text": text}
+        points.append({
+            "id": str(uuid.uuid4()),
+            "vector": [float(v) for v in vectors[i]],
+            "payload": payload,
+        })
+
+    total_indexed = 0
+    for i in range(0, len(points), batch_size):
+        batch = points[i:i+batch_size]
+        client.upsert(collection_name=collection_name, points=batch)
+        total_indexed += len(batch)
+    return total_indexed
 
 if __name__ == "__main__":
     args = sys.argv[1:]

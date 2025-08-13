@@ -64,7 +64,7 @@ def main():
     # Configuration
     host = os.getenv('API_HOST', '0.0.0.0')
     port = int(os.getenv('API_PORT', 5000))
-    debug = os.getenv('API_DEBUG', 'True').lower() == 'true'
+    debug = os.getenv('API_DEBUG', 'False').lower() == 'true'
     
     logger.info(f"Server configuration:")
     logger.info(f"  Host: {host}")

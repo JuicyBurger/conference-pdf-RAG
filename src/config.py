@@ -26,3 +26,19 @@ CHUNK_MAX_CHARS = int(os.getenv("CHUNK_MAX_CHARS", 800))
 
 # Backward compatibility
 OLLAMA_MODEL = DEFAULT_MODEL  # For existing code that uses OLLAMA_MODEL
+
+# Graph / Neo4j settings
+NEO4J_URI = os.getenv("NEO4J_URI")
+# Support both NEO4J_USERNAME and legacy NEO4J_USER
+NEO4J_USERNAME = os.getenv("NEO4J_USERNAME") or os.getenv("NEO4J_USER")
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD")
+# Database name (Neo4j 4.x+ multi-DB). Prefer NEO4J_DATABASE; default 'neo4j'
+NEO4J_DATABASE = os.getenv("NEO4J_DATABASE") or "neo4j"
+TRAINING_CORPUS_ID = os.getenv("TRAINING_CORPUS_ID", "default")
+
+# RAG routing defaults
+RAG_DEFAULT_MODE = os.getenv("RAG_DEFAULT_MODE", "vector")  # vector | graph | hybrid
+
+# Graph traversal / retrieval knobs
+GRAPH_MAX_HOPS = int(os.getenv("GRAPH_MAX_HOPS", 2))
+GRAPH_EXPANSION_TOP_K = int(os.getenv("GRAPH_EXPANSION_TOP_K", 12))

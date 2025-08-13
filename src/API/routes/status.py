@@ -160,14 +160,36 @@ def list_all_tasks():
 
 @status_bp.route('/health', methods=['GET'])
 def health_check():
-    """Simple health check endpoint"""
+    """Health check endpoint with Qdrant and Neo4j indicators"""
     try:
+        # Qdrant
+        qdrant_ok = False
+        try:
+            from qdrant_client import QdrantClient
+            from src.config import QDRANT_API_KEY
+            client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
+            client.get_collections()
+            qdrant_ok = True
+        except Exception:
+            qdrant_ok = False
+
+        # Neo4j
+        neo4j_ok = False
+        try:
+            from src.rag.graph.graph_store import get_driver
+            driver = get_driver()
+            with driver.session() as session:
+                session.run("RETURN 1 as ok")
+            neo4j_ok = True
+        except Exception:
+            neo4j_ok = False
+
+        status = "healthy" if (qdrant_ok and neo4j_ok) else ("degraded" if (qdrant_ok or neo4j_ok) else "down")
         return jsonify(success_response({
-            "status": "healthy",
-            "service": "sinon-rag-api-status",
-            "timestamp": "2024-01-01T00:00:00Z"
-        }, "Service is healthy"))
-    
+            "status": status,
+            "qdrant": qdrant_ok,
+            "neo4j": neo4j_ok
+        }, "Health status"))
     except Exception as e:
         logger.error(f"Error in health check: {e}")
-        return jsonify(error_response(f"Health check failed: {str(e)}")), 500 
+        return jsonify(error_response(f"Health check failed: {str(e)}")), 500

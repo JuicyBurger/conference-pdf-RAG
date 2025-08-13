@@ -1,455 +1,566 @@
-# Sinon-RAG API
+# GraphRAG API Data Structure & Endpoint Document
 
-A Flask-based REST API for real-time chat and PDF document processing using Qdrant vector database for both document storage and chat history.
+This document organizes the data structures used by the application and provides a reference for the backend/Frontend teams to integrate with the API. Content can be adjusted based on actual needs.
 
-## Features
+## Table of Contents
 
-- **Real-time Chat**: Chat with AI using RAG (Retrieval-Augmented Generation)
-- **PDF Upload & Processing**: Upload PDF documents with real-time progress tracking
-- **Qdrant Integration**: Uses Qdrant for both document vectors and chat history storage
-- **Semantic Search**: Advanced semantic search with time decay for chat history
-- **Progress Tracking**: Real-time progress updates for document ingestion
-- **Async Processing**: Non-blocking async operations for optimal performance
-- **Question Suggestions**: Generate and retrieve intelligent question suggestions for documents
+- [Data Structures](#data-structures)
+  - [Chat Room](#chat-room)
+  - [Message](#message)
+  - [User Settings](#user-settings-not-implemented)
+- [API Endpoint Design](#api-endpoint-design)
+  - [Chat-related APIs](#chat-related-apis)
+  - [File-related APIs](#file-related-apis)
+  - [Status APIs](#status-apis)
+  - [Suggestions APIs](#suggestions-apis)
+  - [Health Check](#health-check)
+- [Notes](#notes)
 
-## Quick Start
+## Data Structures
 
-### 1. Install Dependencies
+### Chat Room
 
-```bash
-cd sinon-RAG
-pip install -r requirements.txt
-```
+Chat rooms represent conversation threads. If a request omits `room_id` (or passes "new"/empty), a new room is created automatically.
 
-### 2. Configure Environment
-
-Ensure your `.env` file (in sinon-RAG root) has:
-
-```
-QDRANT_URL=http://localhost:6333
-QDRANT_API_KEY=your_api_key
-QDRANT_COLLECTION=prod1
-```
-
-### 3. Start the Server
-
-```bash
-python run_api.py
-```
-
-Or directly:
-
-```bash
-python app.py
-```
-
-The API will be available at `http://localhost:5000`
-
-## API Endpoints
-
-### Health Check
-```
-GET /health
-GET /
-```
-
-### Chat Endpoints
-
-#### Send Message (with optional PDF upload)
-```
-POST /api/chat/message
-Content-Type: multipart/form-data
-
-Form fields:
-- message: "What is the revenue growth?"
-- room_id: "room-123" (optional)
-- user_id: "user-456" (optional)
-- file: [PDF file] (optional)
-
-OR
-
-POST /api/chat/message
-Content-Type: application/json
-
+```javascript
 {
-  "room_id": "room-123",
-  "message": "What is the revenue growth?",
-  "user_id": "user-456"  // optional
+  room_id: String,          // UUID
+  room_title: String,       // Generated from first message
+  createdAt: DateTime,      // ISO-8601
+  updatedAt: DateTime,      // ISO-8601
+  message_count: Number
 }
 ```
 
-**Workflow:**
-1. If PDF file is provided, it's processed and indexed into Qdrant first
-2. Then the user message is processed using RAG with the newly indexed content
-3. Returns AI response with chat history
+### Message
 
-#### Get Chat History
-```
-GET /api/chat/history/{room_id}?limit=50
-```
+Messages are individual dialogue items in a chat (user input or AI response).
 
-#### Search Messages
-```
-POST /api/chat/search/{room_id}
-Content-Type: application/json
-
+```javascript
 {
-  "query": "revenue growth",
-  "limit": 20
+  msg_id: String,           // UUID
+  role: String,             // "user" | "ai"
+  content: String,
+  timestamp: DateTime,      // ISO-8601
+  files: Array<{            // Present when user uploads PDF with the message
+    filename: String,
+    uploaded_at: DateTime
+  }>
 }
 ```
 
-#### Clear Chat History
-```
-DELETE /api/chat/clear/{room_id}
-```
+### User Settings (Not implemented)
 
-### Upload Endpoints
+Will be implemented when a persistent user database is available.
 
-#### Upload PDF Files
-```
-POST /api/upload/pdf
-Content-Type: multipart/form-data
-
-files: [file1.pdf, file2.pdf, ...]
-```
-
-#### Get Upload Status
-```
-GET /api/upload/status/{task_id}
-```
-
-#### Get Upload History
-```
-GET /api/upload/history?limit=50
-```
-
-### Status Endpoints
-
-#### System Status
-```
-GET /api/status/system
-```
-
-#### Task Progress
-```
-GET /api/status/progress/{task_id}
-```
-
-#### List All Tasks
-```
-GET /api/status/tasks?status=processing&limit=20
-```
-
-### Suggestions Endpoints
-
-#### Get Question Suggestions
-```
-GET /api/v1/suggestions?room_id=room-123&k=5
-GET /api/v1/suggestions?doc_id=document_id&k=5  // Still supported for documents
-GET /api/v1/suggestions?k=5  // Random suggestions when no room_id or doc_id provided
-```
-
-#### Generate Question Suggestions
-```
-POST /api/v1/suggestions
-Content-Type: application/json
-
+```javascript
 {
-  "doc_id": "document_id",  // Single document
-  "num_questions": 8,       // Number of questions to generate
-  "use_lightweight": true,  // Use lightweight generation (faster)
-  "auto_init_collection": true
-}
-
-OR for batch generation:
-
-{
-  "doc_ids": ["doc1", "doc2", "doc3"],  // Multiple documents
-  "num_questions": 8,
-  "use_lightweight": true
+  userId: String,
+  autoScroll: Boolean,
+  notificationsEnabled: Boolean,
+  language: String,
+  theme: String,
+  lastActiveProjectId: String
 }
 ```
 
-#### List Documents with Suggestions
+## API Endpoint Design
+
+### Chat-related APIs
+
+#### List Chat Rooms
+
 ```
-GET /api/v1/suggestions/docs
-```
-
-## Example Usage
-
-### 1. Upload a PDF
-```javascript
-const formData = new FormData();
-formData.append('files', pdfFile);
-
-const response = await fetch('http://localhost:5000/api/upload/pdf', {
-  method: 'POST',
-  body: formData
-});
-
-const result = await response.json();
-console.log('Task ID:', result.data.task_id);
+GET /api/chat/rooms?limit=20
 ```
 
-### 2. Monitor Progress
-```javascript
-const taskId = 'ingest-123';
-const response = await fetch(`http://localhost:5000/api/upload/status/${taskId}`);
-const progress = await response.json();
-
-console.log(`Progress: ${progress.data.progress}%`);
-console.log(`Status: ${progress.data.status}`);
-```
-
-### 3. Send Chat Message (with PDF upload)
-```javascript
-// With PDF file upload (NEW: PDF is parsed and summarized, not ingested into RAG)
-const formData = new FormData();
-formData.append('content', 'What is the revenue growth rate?');
-formData.append('room_id', 'room-123');
-formData.append('file', pdfFile); // PDF file - will be summarized for immediate analysis
-
-const response = await fetch('http://localhost:5000/api/chat/message', {
-  method: 'POST',
-  body: formData
-});
-
-const result = await response.json();
-console.log('AI Response:', result.data.messages[result.data.messages.length - 1].content);
-console.log('PDF Processing Info:', result.data.messages.find(m => m.files).files);
-```
-
-```javascript
-// Without file upload (JSON)
-const response = await fetch('http://localhost:5000/api/chat/message', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({
-    room_id: 'room-123',
-    content: 'What is the revenue growth rate?'
-  })
-});
-
-const result = await response.json();
-console.log('AI Response:', result.data.messages[result.data.messages.length - 1].content);
-```
-
-### 4. Get Chat History
-```javascript
-const response = await fetch('http://localhost:5000/api/chat/history/room-123?limit=20');
-const history = await response.json();
-
-history.data.messages.forEach(msg => {
-  console.log(`${msg.role}: ${msg.text}`);
-});
-```
-
-### 5. Generate Question Suggestions
-```javascript
-// Generate suggestions for a single document
-const response = await fetch('http://localhost:5000/api/v1/suggestions', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({
-    doc_id: 'document_123',
-    num_questions: 10,
-    use_lightweight: true
-  })
-});
-
-const result = await response.json();
-console.log('Generation result:', result.data);
-
-// Generate suggestions for multiple documents
-const batchResponse = await fetch('http://localhost:5000/api/v1/suggestions', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({
-    doc_ids: ['doc1', 'doc2', 'doc3'],
-    num_questions: 8,
-    use_lightweight: true
-  })
-});
-
-const batchResult = await batchResponse.json();
-console.log('Batch generation result:', batchResult.data);
-```
-
-### 6. Get Existing Suggestions
-```javascript
-// Get suggestions for a chat room
-const roomResponse = await fetch('http://localhost:5000/api/v1/suggestions?room_id=room-123&k=5');
-const roomSuggestions = await roomResponse.json();
-
-roomSuggestions.data.suggestions.forEach(suggestion => {
-  console.log(`Room Question: ${suggestion}`);
-});
-
-// Get suggestions for a document (still supported)
-const docResponse = await fetch('http://localhost:5000/api/v1/suggestions?doc_id=document_123&k=5');
-const docSuggestions = await docResponse.json();
-
-docSuggestions.data.suggestions.forEach(suggestion => {
-  console.log(`Document Question: ${suggestion}`);
-});
-
-// Get random suggestions (when no room_id or doc_id provided)
-const randomResponse = await fetch('http://localhost:5000/api/v1/suggestions?k=5');
-const randomSuggestions = await randomResponse.json();
-
-randomSuggestions.data.suggestions.forEach(suggestion => {
-  console.log(`Random Question: ${suggestion}`);
-});
-```
-
-## Response Format
-
-All API responses follow this format:
-
-### Success Response
+Success Response
 ```json
 {
   "status": "success",
-  "message": "Operation completed successfully",
-  "data": { ... },
-  "timestamp": "2024-01-01T10:00:00Z"
+  "limit": 20,
+  "total_count": 2,
+  "data": [
+    {
+      "room_id": "a1b2c3...",
+      "room_title": "文件分析討論",
+      "createdAt": "2024-01-15T10:30:00Z",
+      "updatedAt": "2024-01-15T10:35:00Z",
+      "message_count": 3
+    },
+    {
+      "room_id": "d4e5f6...",
+      "room_title": "詢問技術問題",
+      "createdAt": "2024-01-15T18:00:00Z",
+      "updatedAt": "2024-01-15T18:23:00Z",
+      "message_count": 1
+    }
+  ],
+  "timestamp": "2024-01-15T10:36:00Z"
 }
 ```
 
-### Error Response
+#### Get a Single Chat History Messages
+
+```
+GET /api/chat/histories/:room_id?limit=50
+```
+
+Success Response
 ```json
 {
-  "status": "error",
-  "message": "Error description",
-  "error_code": "ERROR_CODE",
-  "details": { ... },
-  "timestamp": "2024-01-01T10:00:00Z"
+  "status": "success",
+  "data": {
+    "room_id": "a1b2c3...",
+    "room_title": "文件分析討論",
+    "createdAt": "2024-01-15T10:30:00Z",
+    "updatedAt": "2024-01-15T10:35:00Z",
+    "messages": [
+      {
+        "msg_id": "u-1642226",
+        "role": "user",
+        "content": "請總結關鍵重點",
+        "timestamp": "2024-01-15T10:30:00Z",
+        "files": [{ "filename": "report.pdf", "uploaded_at": "2024-01-15T10:29:50Z" }]
+      },
+      {
+        "msg_id": "a-1642227",
+        "role": "ai",
+        "content": "以下是重點摘要...",
+        "timestamp": "2024-01-15T10:31:00Z",
+        "files": []
+      }
+    ]
+  },
+  "timestamp": "2024-01-15T10:36:00Z"
 }
 ```
 
-### Progress Response
+#### Send Message - Get AI Reply
+
+```
+POST /api/chat/message
+```
+
+Content-Type: multipart/form-data
+```
+content: String (Required)       // Message content
+room_id: String|null (Optional)  // Omit or "new" to auto-create
+user_id: String (Optional)
+file: File (Optional)            // Single PDF
+```
+
+OR JSON
+```json
+{
+  "room_id": "a1b2c3...", // Optional
+  "content": "請幫我重點整理"
+}
+```
+
+Success Response
+```json
+{
+  "status": "success",
+  "data": {
+    "room_id": "a1b2c3...",
+    "room_title": "文件分析討論",
+    "createdAt": "2024-01-15T10:30:00Z",
+    "updatedAt": "2024-01-15T10:31:05Z",
+    "messages": [
+      {
+        "msg_id": "u-1642226",
+        "role": "user",
+        "content": "請幫我重點整理",
+        "timestamp": "2024-01-15T10:31:00Z",
+        "files": [{ "filename": "report.pdf", "uploaded_at": "2024-01-15T10:31:00Z" }]
+      },
+      {
+        "msg_id": "a-1642227",
+        "role": "ai",
+        "content": "這份文件的重點包括...",
+        "timestamp": "2024-01-15T10:31:05Z",
+        "files": []
+      }
+    ]
+  }
+}
+```
+
+#### Search Messages
+
+```
+POST /api/chat/search/:room_id
+Content-Type: application/json
+```
+
+Request Body
+```json
+{ "query": "摘要", "limit": 20 }
+```
+
+Success Response
+```json
+{
+  "status": "success",
+  "message": "Success",
+  "data": {
+    "room_id": "a1b2c3...",
+    "query": "摘要",
+    "results": [
+      {
+        "message": { "msg_id": "...", "role": "ai", "content": "以下是重點摘要...", "timestamp": "...", "files": [] },
+        "score": 0.92,
+        "semantic_score": 0.88,
+        "time_score": 0.97
+      }
+    ],
+    "result_count": 1
+  },
+  "timestamp": "2024-01-15T10:40:00Z"
+}
+```
+
+#### Delete Single Chat Room
+
+```
+DELETE /api/chat/rooms/:room_id
+```
+
+Success Response
+```json
+{
+  "status": "success",
+  "data": {
+    "room_id": "a1b2c3...",
+    "room_title": "文件分析討論",
+    "deleted": true
+  },
+  "timestamp": "2024-01-15T10:45:00Z"
+}
+```
+
+### File-related APIs
+
+#### Upload PDF Files (Training Ingestion)
+
+```
+POST /api/upload/pdf
+Content-Type: multipart/form-data
+```
+
+Form fields
+```
+files[]: File (Required)         // 1-10 PDFs, each <= 50MB
+training_room_id: String (Opt)
+```
+
+Success Response (202 Accepted)
+```json
+{
+  "status": "success",
+  "message": "PDF upload started successfully",
+  "data": {
+    "task_id": "ingest-123",
+    "status": {
+      "task_id": "ingest-123",
+      "status": "pending",
+      "progress": 0,
+      "current_file": null,
+      "files_processed": 0,
+      "total_files": 2,
+      "file_names": ["fileA.pdf", "fileB.pdf"],
+      "message": "Initializing...",
+      "chunks_indexed": 0
+    },
+    "files_uploaded": 2,
+    "file_names": ["fileA.pdf", "fileB.pdf"]
+  },
+  "timestamp": "2024-01-15T11:00:00Z"
+}
+```
+
+#### Get Upload Status
+
+```
+GET /api/upload/status/:task_id
+```
+
+Progress Response
 ```json
 {
   "status": "progress",
   "task_id": "ingest-123",
   "data": {
-    "progress": 65,
+    "task_id": "ingest-123",
     "status": "processing",
-    "current_file": "document.pdf",
-    "message": "Processing page 15 of 23..."
+    "progress": 65,
+    "current_file": "fileB.pdf",
+    "files_processed": 1,
+    "total_files": 2,
+    "file_names": ["fileA.pdf", "fileB.pdf"],
+    "message": "Completed fileA.pdf (120 chunks)",
+    "chunks_indexed": 120
   },
-  "timestamp": "2024-01-01T10:00:00Z"
+  "timestamp": "2024-01-15T11:05:00Z"
 }
 ```
 
-## Configuration
+#### Get Upload History
 
-### Environment Variables
-
-- `API_HOST`: Server host (default: 0.0.0.0)
-- `API_PORT`: Server port (default: 5000)
-- `API_DEBUG`: Debug mode (default: True)
-
-### File Upload Limits
-
-- Maximum file size: 50MB per file
-- Maximum files per upload: 10 files
-- Total upload size limit: 500MB
-
-## Architecture
-
-### Chat System
-- **Qdrant Storage**: Chat messages stored as vectors in Qdrant
-- **Recency Buffer**: In-memory buffer for fast recent message access
-- **SQLite Fallback**: Backup storage for service restarts
-- **Semantic Search**: Time-decay weighted semantic search
-- **PDF Processing**: Real-time PDF parsing and summarization (without RAG ingestion)
-
-### Ingestion System
-- **Async Processing**: Background PDF processing with progress tracking
-- **Integration**: Uses existing RAG indexer components
-- **Progress Tracking**: Real-time progress updates with ETA calculation
-
-### RAG Integration
-- **Document Retrieval**: Semantic search in document collection
-- **Chat Context**: Combines document context with chat history
-- **Response Generation**: Uses existing LLM generation pipeline
-
-### Suggestions System
-- **Room-based Generation**: AI-powered question generation based on chat conversation context
-- **Conversation Analysis**: Analyzes chat history to generate relevant follow-up questions
-- **Document Support**: Still supports traditional document-based question generation
-- **Contextual Questions**: Generates questions that naturally continue the conversation flow
-- **Catalog Storage**: Persistent storage of generated suggestions
-- **Random Discovery**: Retrieve random suggestions for content exploration
-
-### PDF Processing (NEW)
-- **Real-time Analysis**: Immediate PDF parsing and summarization without RAG ingestion
-- **Smart Processing**: Large PDFs (>20MB) get summarized, smaller ones get full text extraction
-- **Temporary Storage**: PDFs are processed temporarily and cleaned up after analysis
-- **LLM Integration**: Uses existing LLM infrastructure for intelligent summarization
-- **Context Priority**: PDF content takes priority over RAG documents in responses
-- **Error Handling**: Graceful fallback when PDF processing fails
-
-## Development
-
-### Project Structure
 ```
-API/
-├── app.py                 # Main Flask application
-├── run_api.py            # Launch script
-├── requirements.txt      # Dependencies
-├── services/
-│   ├── chat_service.py   # Chat & Qdrant integration
-│   └── ingestion.py      # PDF processing service
-├── routes/
-│   ├── chat.py          # Chat endpoints
-│   ├── upload.py        # Upload endpoints
-│   ├── status.py        # Status endpoints
-│   └── suggestions.py   # Suggestions endpoints
-└── utils/
-    ├── response.py      # Response formatting
-    └── file_handler.py  # File validation
+GET /api/upload/history?limit=50
 ```
 
-### Adding New Endpoints
+Success Response
+```json
+{
+  "status": "success",
+  "message": "Retrieved 2 ingestion tasks",
+  "data": {
+    "tasks": [
+      { "task_id": "ingest-123", "status": "completed", "progress": 100, "file_names": ["fileA.pdf", "fileB.pdf"] },
+      { "task_id": "ingest-456", "status": "processing", "progress": 30, "file_names": ["fileC.pdf"] }
+    ],
+    "task_count": 2
+  },
+  "timestamp": "2024-01-15T11:10:00Z"
+}
+```
 
-1. Create route handler in appropriate file
-2. Import and register blueprint in `app.py`
-3. Add proper error handling and validation
-4. Use standardized response utilities
+### Status APIs
 
-## Error Handling
+#### System Status
 
-The API includes comprehensive error handling:
+```
+GET /api/status/system
+```
 
-- **Validation Errors**: Invalid input data
-- **File Errors**: Upload validation and processing errors
-- **Service Errors**: Qdrant, embedding, or LLM failures
-- **System Errors**: General server errors
+Success Response
+```json
+{
+  "status": "success",
+  "message": "System status retrieved successfully",
+  "data": {
+    "service": "sinon-rag-api",
+    "status": "healthy",
+    "qdrant": {
+      "url": "http://localhost:6333",
+      "status": "healthy",
+      "document_collection": "prod1",
+      "document_count": 1024,
+      "chat_collection": "chat_messages",
+      "chat_collection_status": "healthy",
+      "chat_message_count": 50
+    },
+    "ingestion": {
+      "active_tasks": 0,
+      "recent_tasks": 2,
+      "task_details": []
+    },
+    "chat": {
+      "buffer_rooms": 1,
+      "service_status": "running"
+    }
+  },
+  "timestamp": "2024-01-15T11:15:00Z"
+}
+```
 
-All errors return standardized error responses with appropriate HTTP status codes.
+#### Task Progress (Generic)
 
-## Security Considerations
+```
+GET /api/status/progress/:task_id
+```
 
-- **CORS**: Configured for cross-origin requests
-- **File Validation**: Strict PDF validation and size limits
-- **Input Sanitization**: All inputs validated and sanitized
-- **Error Information**: Sensitive information not exposed in error messages
+Success Response
+```json
+{
+  "status": "success",
+  "message": "Progress retrieved successfully",
+  "data": {
+    "task_id": "ingest-123",
+    "status": "processing",
+    "progress": 65,
+    "current_file": "fileB.pdf",
+    "files_processed": 1,
+    "total_files": 2,
+    "file_names": ["fileA.pdf", "fileB.pdf"],
+    "message": "Completed fileA.pdf (120 chunks)",
+    "chunks_indexed": 120
+  },
+  "timestamp": "2024-01-15T11:05:00Z"
+}
+```
 
-## Monitoring
+#### List All Tasks
 
-### Health Checks
-- Basic health endpoint at `/health`
-- System status with component health at `/api/status/system`
+```
+GET /api/status/tasks?status=processing&limit=20
+```
 
-### Logging
-- Structured logging to console and file
-- Request/response logging
-- Error tracking with stack traces
+Success Response
+```json
+{
+  "status": "success",
+  "message": "Retrieved 2 tasks",
+  "data": {
+    "tasks": [
+      { "task_id": "ingest-123", "status": "completed" },
+      { "task_id": "ingest-456", "status": "processing" }
+    ],
+    "statistics": {
+      "total": 2,
+      "pending": 0,
+      "processing": 1,
+      "completed": 1,
+      "failed": 0
+    },
+    "filters": { "status": "processing", "limit": 20 }
+  },
+  "timestamp": "2024-01-15T11:20:00Z"
+}
+```
 
-### Metrics
-- Task completion statistics
-- System resource usage via status endpoints
-- Chat activity metrics 
+#### Component Health
+
+```
+GET /api/status/health
+```
+
+Success Response
+```json
+{
+  "status": "success",
+  "message": "Health status",
+  "data": {
+    "status": "healthy",
+    "qdrant": true,
+    "neo4j": true
+  },
+  "timestamp": "2024-01-15T11:25:00Z"
+}
+```
+
+### Suggestions APIs
+
+#### Get Question Suggestions
+
+```
+GET /api/v1/suggestions?room_id=room-123&k=5
+GET /api/v1/suggestions?doc_id=document_123&k=5
+GET /api/v1/suggestions?k=5               // Random when no room_id/doc_id
+```
+
+Rules: provide either `room_id` OR `doc_id`. `k` must be between 1 and 20.
+
+Success Response
+```json
+{
+  "status": "success",
+  "message": "Success",
+  "data": [
+    { "id": "sug-1", "text": "該文件的主要結論是什麼？" },
+    { "id": "sug-2", "text": "有無提及關鍵風險？" }
+  ],
+  "timestamp": "2024-01-15T11:30:00Z"
+}
+```
+
+#### Generate Question Suggestions
+
+```
+POST /api/v1/suggestions
+Content-Type: application/json | application/x-www-form-urlencoded
+```
+
+Request Body
+```json
+{
+  "room_id": "room-123",          // OR use doc_id instead
+  "num_questions": 8,
+  "use_lightweight": true,
+  "auto_init_collection": true
+}
+```
+
+Success Response (room-based)
+```json
+{
+  "status": "success",
+  "message": "Success",
+  "data": {
+    "room_id": "room-123",
+    "success": true,
+    "num_questions": 8,
+    "message": "Successfully generated 8 suggestions based on conversation context"
+  },
+  "timestamp": "2024-01-15T11:35:00Z"
+}
+```
+
+Success Response (document-based)
+```json
+{
+  "status": "success",
+  "message": "Success",
+  "data": {
+    "doc_id": "document_123",
+    "success": true,
+    "num_questions": 8,
+    "use_lightweight": true,
+    "message": "Successfully generated 8 suggestions for document"
+  },
+  "timestamp": "2024-01-15T11:35:00Z"
+}
+```
+
+#### List Documents with Suggestions
+
+```
+GET /api/v1/suggestions/docs
+```
+
+Success Response
+```json
+{
+  "status": "success",
+  "message": "Success",
+  "data": {
+    "doc_ids": ["doc1", "doc2", "doc3"],
+    "total": 3
+  },
+  "timestamp": "2024-01-15T11:40:00Z"
+}
+```
+
+### Health Check
+
+```
+GET /
+GET /health
+```
+
+Success Response (root/health)
+```json
+{
+  "status": "healthy",
+  "service": "sinon-rag-api",
+  "version": "1.0.0",
+  "endpoints": [
+    "/api/chat/message",
+    "/api/chat/history/<room_id>",
+    "/api/upload/pdf",
+    "/api/upload/status/<task_id>",
+    "/api/status/progress/<task_id>"
+  ]
+}
+```
+
+## Notes
+
+1. All endpoints return standardized JSON envelopes. Validation errors use `error_code="VALIDATION_ERROR"`; not-found cases use `error_code="NOT_FOUND"`.
+2. For chat with PDF, the API summarizes/extracts the content for immediate use and indexes it to Qdrant with `scope=chat` and `room_id` for room-scoped retrieval.
+3. File constraints: max 10 files, 50MB per file, total request size up to 500MB.
+4. Consider enabling streaming and/or SSE for enhanced UX (not included here).
+5. CORS is enabled; sensitive deployments should add authentication/authorization.

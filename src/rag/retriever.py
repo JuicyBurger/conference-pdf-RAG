@@ -125,6 +125,10 @@ def retrieve(
     score_threshold: float = 0.3,
     constraints_override: dict | None = None,
     search_query_override: str | None = None,
+    room_id: str | None = None,
+    prefer_chat_scope: bool = True,
+    scope_filter: str | None = None,
+    extra_filters: dict | None = None,
 ):
     """
     Retrieve relevant documents with deduplication, score filtering, and constraint support.
@@ -182,6 +186,31 @@ def retrieve(
 
     # -------------------- Build constraint filters --------------------
     must_filters = []
+    # Room scoping
+    if room_id and prefer_chat_scope:
+        try:
+            must_filters.append(FieldCondition(key="room_id", match=MatchValue(value=room_id)))
+            must_filters.append(FieldCondition(key="scope", match=MatchValue(value="chat")))
+        except Exception:
+            pass
+    # Explicit scope filter override
+    # Arbitrary extra filters on payload keys
+    if extra_filters:
+        try:
+            for k, v in extra_filters.items():
+                if isinstance(v, list):
+                    must_filters.append(FieldCondition(key=k, match=MatchAny(any=v)))
+                else:
+                    must_filters.append(FieldCondition(key=k, match=MatchValue(value=v)))
+        except Exception:
+            pass
+    if scope_filter:
+        try:
+            must_filters.append(FieldCondition(key="scope", match=MatchValue(value=scope_filter)))
+            if room_id:
+                must_filters.append(FieldCondition(key="room_id", match=MatchValue(value=room_id)))
+        except Exception:
+            pass
     
     # Document ID constraints (support multiple docs)
     doc_id_constraints_applied = False
@@ -301,6 +330,28 @@ def retrieve(
     try:
         # Build keyword filter (with doc_id if present, but without hard content_type filtering)
         keyword_must = [FieldCondition(key="text", match=MatchText(text=search_query))]
+        if room_id and prefer_chat_scope:
+            try:
+                keyword_must.append(FieldCondition(key="room_id", match=MatchValue(value=room_id)))
+                keyword_must.append(FieldCondition(key="scope", match=MatchValue(value="chat")))
+            except Exception:
+                pass
+        if scope_filter:
+            try:
+                keyword_must.append(FieldCondition(key="scope", match=MatchValue(value=scope_filter)))
+                if room_id:
+                    keyword_must.append(FieldCondition(key="room_id", match=MatchValue(value=room_id)))
+            except Exception:
+                pass
+        if extra_filters:
+            try:
+                for k, v in extra_filters.items():
+                    if isinstance(v, list):
+                        keyword_must.append(FieldCondition(key=k, match=MatchAny(any=v)))
+                    else:
+                        keyword_must.append(FieldCondition(key=k, match=MatchValue(value=v)))
+            except Exception:
+                pass
         # Only include doc_id/page filters
         if doc_id_constraints_applied:
             if len(cleaned_doc_ids) == 1:

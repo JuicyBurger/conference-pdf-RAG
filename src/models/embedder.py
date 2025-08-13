@@ -2,10 +2,13 @@ from sentence_transformers import SentenceTransformer
 from typing import Union, List
 import torch
 
+# Select device automatically
+_device = "cuda" if torch.cuda.is_available() else "cpu"
+
 # Optimize model loading with performance settings
 model = SentenceTransformer(
     "jinaai/jina-embeddings-v2-base-zh",
-    device="cuda"
+    device=_device
 )
 
 # Enable optimizations
@@ -15,6 +18,7 @@ if torch.cuda.is_available():
     print("🚀 Using GPU acceleration for embeddings")
 else:
     print("💻 Using CPU for embeddings")
+
 
 def embed(text: Union[str, List[str]]):
     """

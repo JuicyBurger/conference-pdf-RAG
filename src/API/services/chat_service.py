@@ -421,9 +421,18 @@ class AsyncChatService:
             "created_at": timestamp,
             "updated_at": timestamp,
             "created_by": user_id,
-            "message_count": 0
+            "message_count": 0,
+            # Default RAG mode from config; fall back to 'vector'
+            "rag_mode": None
         }
         
+        # Set rag_mode default from config if not provided
+        try:
+            from src.config import RAG_DEFAULT_MODE
+            room_data["rag_mode"] = RAG_DEFAULT_MODE or "vector"
+        except Exception:
+            room_data["rag_mode"] = "vector"
+
         # Cache room data
         self.rooms[room_id] = room_data
         
@@ -812,6 +821,22 @@ class AsyncChatService:
             if self.client:
                 # Try to delete using filter first
                 try:
+                    # Also delete any chat-scoped document chunks in main collection
+                    def _delete_room_scoped_docs():
+                        try:
+                            from src.config import QDRANT_COLLECTION
+                            from qdrant_client.http.models import Filter, FieldCondition, MatchValue
+                            self.client.delete(
+                                collection_name=QDRANT_COLLECTION,
+                                points_selector=Filter(
+                                    must=[
+                                        FieldCondition(key="room_id", match=MatchValue(value=room_id))
+                                    ]
+                                )
+                            )
+                        except Exception:
+                            pass
+
                     def _delete_messages():
                         return self.client.delete(
                             collection_name=self.CHAT_COLLECTION,
@@ -827,6 +852,7 @@ class AsyncChatService:
                         )
                     
                     # Execute deletions
+                    await loop.run_in_executor(self.executor, _delete_room_scoped_docs)
                     await loop.run_in_executor(self.executor, _delete_messages)
                     await loop.run_in_executor(self.executor, _delete_room)
                     

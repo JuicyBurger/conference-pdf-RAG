@@ -21,9 +21,7 @@ from src.API.utils.file_handler import validate_pdf_file, validate_file_size, Fi
 
 # Import existing RAG components
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
-from src.rag.retriever import retrieve
-from src.rag.generator import generate_answer
-from src.models.reranker import rerank
+from src.rag.router import router
 from src.data.pdf_summarizer import summarize_pdf_content, extract_pdf_text_for_chat
 from src.config import QDRANT_COLLECTION
 
@@ -171,7 +169,7 @@ def send_message():
             print(f"💾 Saved PDF temporarily to: {temp_path}")
             
             try:
-                # NEW: Summarize PDF content instead of ingesting
+                # NEW: Summarize PDF content; also index to Qdrant scoped to room for local RAG
                 print(f"🔄 Analyzing and summarizing PDF: {pdf_file.filename}")
                 
                 # Check file size to determine strategy
@@ -254,6 +252,16 @@ def send_message():
                 }
                 uploaded_files.append(file_info)
                 
+                # Index PDF into Qdrant with room scoping for local RAG
+                try:
+                    from src.rag.indexing.indexer import index_pdf
+                    from src.config import QDRANT_COLLECTION
+                    extra_payload = {"room_id": room_id, "scope": "chat"}
+                    _ = index_pdf(temp_path, collection_name=QDRANT_COLLECTION, doc_id=os.path.splitext(pdf_file.filename)[0], extra_payload=extra_payload)
+                    print("✅ Indexed uploaded PDF into room-scoped Qdrant collection")
+                except Exception as idx_err:
+                    print(f"⚠️ Failed to index uploaded PDF into Qdrant: {idx_err}")
+                
             except Exception as e:
                 print(f"❌ Error processing PDF: {e}")
                 pdf_summary = None
@@ -303,54 +311,12 @@ def send_message():
                 logger.info(f"🔄 Original query: '{content}'")
                 logger.info(f"🔄 Rewritten query: '{rewritten_query}'")
             
-                # 3. Retrieve relevant documents from RAG system using rewritten query
-                # Preserve explicit constraints from original content (e.g., doc_id) to avoid losing them via rewrite
-                from src.rag.retriever import parse_constraints_for_text
-                _orig_cleaned, orig_constraints = parse_constraints_for_text(content)
-                constraints_override = orig_constraints if (orig_constraints.get('doc_ids') or orig_constraints.get('pages') or orig_constraints.get('content_types')) else None
-                print(f"🔍 Searching for: '{rewritten_query}'")
-                # If we have explicit constraints from the original content (e.g., doc_id), prefer the original content as search basis
-                search_query_override = content if constraints_override else None
-                document_hits = retrieve(
-                    query=rewritten_query,
-                    top_k=5,
-                    score_threshold=0.3,
-                    constraints_override=constraints_override,
-                    search_query_override=search_query_override,
+                # 3. Use router to generate answer (vector/graph/hybrid per room mode)
+                query_for_answer = (
+                    build_context_prompt(content, chat_history, None, pdf_summary)
+                    if pdf_summary else rewritten_query
                 )
-            
-                # 3. Build comprehensive context with PDF summary priority
-                if pdf_summary:
-                    # NEW: PDF content takes priority
-                    print(f"📄 Using uploaded PDF content for response generation")
-                    
-                    # Still use document hits for additional context if available
-                    if document_hits and len(document_hits) > 1:
-                        document_hits = rerank(content, document_hits)
-                    
-                    # Generate answer with PDF summary as primary source
-                    context_prompt = build_context_prompt(content, chat_history, document_hits, pdf_summary)
-                    
-                    # Create a dummy hit representing the PDF content for the generator
-                    pdf_hit = type('Hit', (), {
-                        'payload': {'content': pdf_summary[:1000], 'page': 'uploaded_pdf'}  # First 1000 chars
-                    })()
-                    
-                    # Combine PDF hit with document hits for comprehensive context
-                    all_hits = [pdf_hit] + (document_hits[:2] if document_hits else [])
-                    ai_response = generate_answer(context_prompt, all_hits)
-                    
-                elif document_hits:
-                    # Original RAG flow when no PDF is uploaded
-                    if len(document_hits) > 1:
-                        document_hits = rerank(content, document_hits)
-                    
-                    context_prompt = build_context_prompt(content, chat_history, document_hits)
-                    ai_response = generate_answer(context_prompt, document_hits)
-                    
-                else:
-                    # Ask for clarification instead of generating with weak evidence
-                    ai_response = "我目前沒有足夠的文件證據來回答。可以提供更具體的主題、關鍵詞或頁碼嗎？"
+                ai_response = router.answer(room_id, query_for_answer, pdf_summary=pdf_summary)
              
             except Exception as rag_error:
                 logger.error(f"RAG processing error: {rag_error}")

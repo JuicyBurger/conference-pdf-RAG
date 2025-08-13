@@ -26,3 +26,10 @@ Werkzeug==2.3.7
 # Built-in modules (no need to install)
 # asyncio - built-in
 # threading - built-in
+
+# LlamaIndex / GraphRAG / Neo4j
+llama-index-core
+llama-index-vector-stores-qdrant
+llama-index-graph-stores-neo4j
+neo4j
+tiktoken

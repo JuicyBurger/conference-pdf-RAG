@@ -21,6 +21,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 from src.rag.indexing.indexer import index_pdf
 from src.config import QDRANT_COLLECTION
 from werkzeug.utils import secure_filename
+from src.rag.graph.training_ingestion import ingest_pdfs_to_graph
 
 
 class IngestionProgress:
@@ -141,7 +142,7 @@ class AsyncIngestionService:
             })
         return saved_files_info, task_id
     
-    def _process_single_pdf(self, file_path: str, task_id: str, file_index: int, progress_callback: Callable = None, original_filename: str | None = None, preferred_doc_id: str | None = None) -> int:
+    def _process_single_pdf(self, file_path: str, task_id: str, file_index: int, progress_callback: Callable = None, original_filename: str | None = None, preferred_doc_id: str | None = None, room_id: str | None = None, scope: str | None = None) -> int:
         """Process a single PDF file with progress updates"""
         try:
             filename = os.path.basename(file_path)
@@ -158,10 +159,19 @@ class AsyncIngestionService:
                 progress_callback(task_id, f"Starting {filename}")
             
             # Process the PDF using existing indexer (pass through preferred doc_id to preserve user-visible name)
+            # Scope: if room_id provided, mark as chat-scoped; else global
+            extra_payload = {}
+            if room_id:
+                extra_payload["room_id"] = room_id
+            # default scope if provided, else leave unset
+            if scope:
+                extra_payload["scope"] = scope
+
             chunks_indexed = index_pdf(
                 file_path,
                 collection_name=QDRANT_COLLECTION,
-                doc_id=preferred_doc_id
+                doc_id=preferred_doc_id,
+                extra_payload=extra_payload or None,
             )
             
             # Update progress
@@ -229,7 +239,7 @@ class AsyncIngestionService:
             final_task["total_chunks"] = total_chunks
             
             if progress_callback:
-                progress_callback(task_id, f"Ingestion completed! Indexed {total_chunks} chunks from {len(file_paths)} files.")
+                progress_callback(task_id, f"Ingestion completed! Indexed {total_chunks} chunks from {len(files_info)} files.")
             
         except Exception as e:
             self.progress.complete_task(task_id, success=False, error=str(e))
@@ -262,6 +272,46 @@ class AsyncIngestionService:
             daemon=True
         ).start()
 
+        return task_id
+
+    def start_training_ingestion(self, files: list, training_room_id: str | None, progress_callback: Callable = None) -> str:
+        """Start GraphRAG training ingestion with progress tracking."""
+        # Save files synchronously and create task
+        files_info, task_id = self.save_uploaded_files_sync(files)
+        file_names = [info["original_filename"] for info in files_info]
+
+        # Mark as processing
+        self.progress.create_task(task_id, len(files_info), file_names)
+
+        def _run():
+            try:
+                total_files = len(files_info)
+                processed = 0
+                for i, info in enumerate(files_info):
+                    self.progress.update_task(task_id, status="processing", current_file=info["original_filename"])
+                    if progress_callback:
+                        progress_callback(task_id, f"Training ingest {info['original_filename']}")
+                    try:
+                        # Try to pass a corpus id if available via env; keep back-compat room id
+                        from src.config import TRAINING_CORPUS_ID
+                        result = ingest_pdfs_to_graph([info["path"]], training_room_id=training_room_id, training_corpus_id=TRAINING_CORPUS_ID)
+                        # Update message with summary
+                        summary = result.get(info["path"], {})
+                        self.progress.update_task(task_id, message=f"Neo4j {summary.get('neo4j_chunks', 0)} / Qdrant {summary.get('qdrant_chunks', 0)}")
+                    finally:
+                        try:
+                            os.remove(info["path"])
+                        except Exception:
+                            pass
+                    processed += 1
+                    self.progress.update_task(task_id, files_processed=processed, progress=int(processed * 100 / total_files))
+                self.progress.complete_task(task_id, success=True)
+            except Exception as e:
+                self.progress.complete_task(task_id, success=False, error=str(e))
+                if progress_callback:
+                    progress_callback(task_id, f"Training ingestion failed: {e}")
+
+        threading.Thread(target=_run, daemon=True).start()
         return task_id
     
     def get_ingestion_status(self, task_id: str) -> Optional[dict]:

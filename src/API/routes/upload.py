@@ -45,7 +45,11 @@ def upload_pdf():
             """Progress callback for real-time updates"""
             logger.info(f"Task {task_id}: {message}")
         
-        task_id = ingestion_service.start_ingestion(validated_files, progress_callback)
+        # Default behavior: GraphRAG training ingestion (corpus-scoped). No params required.
+        # Backwards-compat: accept optional training_room_id/training_corpus_id but not required.
+        training_room_id = request.form.get('training_room_id') or request.args.get('training_room_id')
+        # Kick off training ingestion in background via service wrapper
+        task_id = ingestion_service.start_training_ingestion(validated_files, training_room_id, progress_callback)
         
         # Get initial task status
         task_status = ingestion_service.get_ingestion_status(task_id)
