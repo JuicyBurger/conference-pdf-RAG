@@ -1,8 +1,24 @@
 # src/rag/indexing/indexer.py
 
 # stdlib
-import os, sys, glob, uuid
+import os, sys, glob, uuid, hashlib
 from typing import List
+
+def md5_to_uuid(md5_hash: str) -> str:
+    """Convert an MD5 hash to UUID format by inserting hyphens."""
+    if not md5_hash or len(md5_hash) != 32:
+        raise ValueError(f"Invalid MD5 hash: {md5_hash}")
+    
+    # Insert hyphens at positions 8, 12, 16, 20
+    uuid_parts = [
+        md5_hash[0:8],
+        md5_hash[8:12], 
+        md5_hash[12:16],
+        md5_hash[16:20],
+        md5_hash[20:32]
+    ]
+    
+    return "-".join(uuid_parts)
 
 # third-party
 from qdrant_client import QdrantClient
@@ -37,6 +53,7 @@ def ensure_indexes_exist(collection_name: str = QDRANT_COLLECTION) -> None:
         ("text", "text", "Full-text search"),
         ("room_id", "keyword", "Room scoping for chat uploads"),
         ("scope", "keyword", "Data scope flag: chat/global/graph"),
+        ("corpus_id", "keyword", "Corpus scoping for training graph"),
     ]
     
     for field_name, field_schema, description in required_indexes:
@@ -54,6 +71,54 @@ def ensure_indexes_exist(collection_name: str = QDRANT_COLLECTION) -> None:
                 print(f"⚠️ Could not create index on '{field_name}': {e}")
     
     print("🎉 All indexes ensured!")
+
+
+def add_missing_indexes(collection_name: str = QDRANT_COLLECTION):
+    """Add missing indexes to an existing collection.
+    
+    This is a utility function for adding indexes to existing collections
+    that may have been created without proper indexing.
+    """
+    print(f"🔍 Checking collection '{collection_name}'...")
+    
+    # Check if collection exists
+    try:
+        collection_info = client.get_collection(collection_name)
+        print(f"✅ Collection exists with {collection_info.points_count} points")
+    except Exception as e:
+        print(f"❌ Collection '{collection_name}' not found: {e}")
+        return
+    
+    # List of indexes to create
+    indexes_to_create = [
+        ("doc_id", "keyword", "Document ID filtering"),
+        ("page", "integer", "Page number filtering"), 
+        ("type", "keyword", "Content type filtering"),
+        ("text", "text", "Full-text search"),
+    ]
+    
+    print("\n🔧 Adding missing indexes...")
+    
+    for field_name, field_schema, description in indexes_to_create:
+        try:
+            client.create_payload_index(
+                collection_name=collection_name,
+                field_name=field_name,
+                field_schema=field_schema,
+            )
+            print(f"✅ Created {field_schema} index on '{field_name}' - {description}")
+        except Exception as e:
+            if "already exists" in str(e).lower():
+                print(f"ℹ️ Index on '{field_name}' already exists")
+            else:
+                print(f"⚠️ Failed to create index on '{field_name}': {e}")
+    
+    print("\n🎉 Index creation completed!")
+    print("\n📋 Available filtering capabilities:")
+    print("  • doc_id: Filter by specific documents")
+    print("  • page: Filter by page numbers (e.g., page 43)")
+    print("  • type: Filter by content type (paragraph, table_record)")
+    print("  • text: Full-text search within content")
 
 
 def init_collection(collection_name: str = QDRANT_COLLECTION) -> None:
@@ -168,8 +233,13 @@ def index_nodes(nodes: List[dict], collection_name: str = QDRANT_COLLECTION, doc
             if "structured_data" in metadata:
                 payload["structured_data"] = metadata["structured_data"]
         
+        # Generate consistent ID using same method as Neo4j
+        seed = f"{doc_id}|{metadata['page']}|{metadata['type']}|{metadata.get('chunk_idx', 0)}|{metadata['text'][:64]}".encode("utf-8", errors="ignore")
+        md5_hash = hashlib.md5(seed).hexdigest()
+        chunk_id = md5_to_uuid(md5_hash)  # Convert to UUID format
+        
         points.append({
-            "id": str(uuid.uuid4()),
+            "id": chunk_id,
             "vector": vectors[i],
             "payload": payload,
         })
@@ -239,8 +309,8 @@ def index_nodes(nodes: List[dict], collection_name: str = QDRANT_COLLECTION, doc
     
     # Add the document ID to the query parser for future queries
     try:
-        from ..retriever import add_new_doc_id_to_parser
-        add_new_doc_id_to_parser(doc_id)
+        from ..retrieval.retrieval_service import retrieval_service
+        retrieval_service.add_new_doc_id_to_parser(doc_id)
         print(f"✅ Added '{doc_id}' to query parser vocabulary")
     except Exception as e:
         print(f"⚠️ Failed to add '{doc_id}' to query parser: {e}")
@@ -365,6 +435,14 @@ if __name__ == "__main__":
         print("✅ Indexes ensured!")
         sys.exit(0)
     
+    # Check if user wants to add missing indexes
+    if "--add-missing-indexes" in args:
+        args.remove("--add-missing-indexes")
+        print("🔧 Adding missing indexes...")
+        add_missing_indexes()
+        print("✅ Missing indexes added!")
+        sys.exit(0)
+    
     recreate = "--no-recreate" not in args
     # Remove the flag from the list
     args = [a for a in args if a != "--no-recreate"]
@@ -378,8 +456,9 @@ if __name__ == "__main__":
             pdfs.append(a)
 
     if not pdfs:
-        print("Usage: python -m src.rag.indexing.indexer [--ensure-indexes] [--no-recreate] <pdf1> [pdf2 ...]")
+        print("Usage: python -m src.rag.indexing.indexer [--ensure-indexes] [--add-missing-indexes] [--no-recreate] <pdf1> [pdf2 ...]")
         print("  --ensure-indexes: Just ensure indexes exist without indexing files")
+        print("  --add-missing-indexes: Add missing indexes to existing collection")
         sys.exit(1)
 
     index_pdfs(pdfs, recreate=recreate)

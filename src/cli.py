@@ -3,13 +3,12 @@ import glob
 import os
 import json
 import uuid
-
-
+import sys
 
 from .rag.indexing.indexer import init_collection, index_pdf
-from .rag.retriever    import retrieve, get_all_doc_ids
+from .rag.retrieval.retrieval_service import retrieval_service
 from .models.reranker  import rerank
-from .rag.generator    import generate_answer, generate_qa_pairs_for_doc
+from .rag.qa_generation import generate_answer, generate_qa_pairs_for_doc
 from .rag.suggestions  import generate_suggestions_for_doc, batch_generate_suggestions
 from .data.pdf_ingestor import extract_text_pages, extract_tables_per_page, build_page_nodes
 
@@ -32,7 +31,7 @@ def cmd_index(args):
 
 
 def cmd_query(args):
-    hits = retrieve(args.question, top_k=args.topk)
+    hits = retrieval_service.retrieve(args.question, top_k=args.topk)
     hits = rerank(args.question, hits)
     print(generate_answer(args.question, hits))
 
@@ -40,7 +39,7 @@ def cmd_query(args):
 def cmd_list_docs(args):
     """List all available document IDs"""
     try:
-        doc_ids = get_all_doc_ids()
+        doc_ids = retrieval_service.get_all_doc_ids()
         if doc_ids:
             print("📚 Available documents:")
             for doc_id in sorted(doc_ids):
@@ -145,11 +144,110 @@ def cmd_reset(args):
     print("🎉 Reset complete.")
 
 
+def cmd_chat(args):
+    """Interactive chat interface for testing document retrieval"""
+    print("🤖 Document Chat Interface")
+    print("=" * 50)
+    print("💡 Ask questions about your indexed documents")
+    print("❓ Commands: 'quit', 'exit', 'q' to exit")
+    print("-" * 50)
+    
+    # Check if we have indexed documents
+    try:
+        # Test connection to Qdrant
+        client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
+        
+        # Check if collection exists and has data
+        collections = client.get_collections()
+        collection_names = [col.name for col in collections.collections]
+        
+        if QDRANT_COLLECTION not in collection_names:
+            print("❌ No indexed documents found!")
+            print("💡 Please run: python -m src.cli index 'data/raw/*.pdf' first")
+            return
+        
+        # Check if collection has points
+        collection_info = client.get_collection(QDRANT_COLLECTION)
+        if collection_info.points_count == 0:
+            print("❌ Collection is empty!")
+            print("💡 Please run: python -m src.cli index 'data/raw/*.pdf' first")
+            return
+            
+        print(f"✅ Found {collection_info.points_count} indexed documents")
+        
+    except Exception as e:
+        print(f"❌ Error connecting to Qdrant: {e}")
+        print("💡 Please check your .env configuration")
+        return
+    
+    # Start chat loop
+    while True:
+        try:
+            # Get user input
+            question = input("\n❓ Your question: ").strip()
+            
+            # Handle commands
+            if question.lower() in ['quit', 'exit', 'q']:
+                print("👋 Goodbye!")
+                break
+                
+            elif not question:
+                print("⚠️ Please enter a question")
+                continue
+            
+            # Process the question
+            print("🔍 Searching documents...")
+            
+            # Use original query since this is a simple interface
+            rewritten_query = question  # Placeholder for future enhancement
+            
+            # Retrieve relevant chunks with optimized parameters
+            hits = retrieval_service.retrieve(query=rewritten_query, top_k=5, score_threshold=0.3)
+            if not hits:
+                print("❌ No relevant documents found (try lowering search criteria)")
+                continue
+                
+            # Rerank for better relevance (only if we have multiple hits)
+            if len(hits) > 1:
+                print("📊 Reranking results...")
+                hits = rerank(question, hits)
+            
+            # Generate answer
+            print("🤖 Generating answer...")
+            answer = generate_answer(question, hits)
+            
+            # Display results
+            print("\n" + "=" * 50)
+            print("📝 ANSWER:")
+            print(answer)
+            print("=" * 50)
+            
+            # Show source information
+            print("\n📚 SOURCES:")
+            for i, hit in enumerate(hits[:3], 1):  # Show top 3 sources
+                page = hit.payload.get('page', 'Unknown')
+                doc_id = hit.payload.get('doc_id', 'Unknown')
+                score = hit.score if hasattr(hit, 'score') else 'N/A'
+                print(f"  {i}. Document: {doc_id}, Page: {page}, Score: {score:.3f}")
+            
+            # Show text preview from top source
+            if hits:
+                top_hit = hits[0]
+                text_preview = top_hit.payload.get('text', '')[:200]
+                if len(text_preview) > 200:
+                    text_preview += "..."
+                print(f"\n📖 Top source preview: {text_preview}")
+            
+        except KeyboardInterrupt:
+            print("\n👋 Goodbye!")
+            break
+        except Exception as e:
+            print(f"❌ Error: {e}")
+            print("💡 Try asking a different question")
+
 def main():
     parser = argparse.ArgumentParser(prog="rag")
     sub = parser.add_subparsers()
-
-
 
     ix = sub.add_parser("index")
     ix.add_argument("pattern", help="glob pattern, e.g. data/raw/*.pdf")
@@ -163,6 +261,10 @@ def main():
 
     l = sub.add_parser("list-docs", help="List all available document IDs")
     l.set_defaults(func=cmd_list_docs)
+    
+    # Add chat subcommand
+    c = sub.add_parser("chat", help="Start an interactive chat session with your documents")
+    c.set_defaults(func=cmd_chat)
 
     g = sub.add_parser("qa-generate", help="Generate Q&A pairs from indexed document")
     g.add_argument("doc_id", help="Document ID to generate QA pairs for")

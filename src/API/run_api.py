@@ -45,8 +45,8 @@ def main():
     
     # Bootstrap jieba with document IDs from Qdrant
     try:
-        from src.rag.retriever import bootstrap_jieba_from_qdrant
-        bootstrap_success = bootstrap_jieba_from_qdrant()
+        from src.rag.retrieval.retrieval_service import retrieval_service
+        bootstrap_success = retrieval_service.bootstrap_jieba_from_qdrant()
         if bootstrap_success:
             print("✅ Successfully bootstrapped jieba with document IDs")
         else:

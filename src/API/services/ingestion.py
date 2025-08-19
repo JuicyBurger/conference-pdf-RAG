@@ -21,7 +21,11 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 from src.rag.indexing.indexer import index_pdf
 from src.config import QDRANT_COLLECTION
 from werkzeug.utils import secure_filename
-from src.rag.graph.training_ingestion import ingest_pdfs_to_graph
+from src.rag.graph.indexer import ingest_pdfs_to_graph
+from src.rag.utils import handle_errors, DatabaseError, setup_logger
+
+# Configure logging
+logger = setup_logger(__name__)
 
 
 class IngestionProgress:
@@ -117,7 +121,8 @@ class AsyncIngestionService:
         self.executor = ThreadPoolExecutor(max_workers=2)
         self.progress = IngestionProgress()
         os.makedirs(upload_dir, exist_ok=True)
-        self.logger = logging.getLogger(__name__)
+        # Use our centralized logger instead of creating a new one
+        self.logger = logger
     
     def save_uploaded_files_sync(self, files: list) -> tuple[list, str]:
         """Save uploaded files synchronously and return file infos and task ID.
@@ -142,6 +147,7 @@ class AsyncIngestionService:
             })
         return saved_files_info, task_id
     
+    @handle_errors(error_class=DatabaseError, reraise=True)
     def _process_single_pdf(self, file_path: str, task_id: str, file_index: int, progress_callback: Callable = None, original_filename: str | None = None, preferred_doc_id: str | None = None, room_id: str | None = None, scope: str | None = None) -> int:
         """Process a single PDF file with progress updates"""
         try:
@@ -194,6 +200,7 @@ class AsyncIngestionService:
                 progress_callback(task_id, error_msg)
             raise
     
+    @handle_errors(error_class=DatabaseError, reraise=False)
     async def _ingest_files_async(self, files_info: list, task_id: str, progress_callback: Callable = None):
         """Async wrapper for file ingestion"""
         try:
@@ -225,10 +232,10 @@ class AsyncIngestionService:
             
             # Add document IDs to query parser for future queries
             try:
-                from src.rag.retriever import add_new_doc_id_to_parser
+                from src.rag.retrieval.retrieval_service import retrieval_service
                 for info in files_info:
                     doc_id = info["preferred_doc_id"]
-                    add_new_doc_id_to_parser(doc_id)
+                    retrieval_service.add_new_doc_id_to_parser(doc_id)
                     self.logger.info(f"Added '{doc_id}' to query parser vocabulary")
             except Exception as e:
                 self.logger.warning(f"Failed to add document IDs to query parser: {e}")
@@ -274,6 +281,7 @@ class AsyncIngestionService:
 
         return task_id
 
+    @handle_errors(error_class=DatabaseError, fallback_return="")
     def start_training_ingestion(self, files: list, training_room_id: str | None, progress_callback: Callable = None) -> str:
         """Start GraphRAG training ingestion with progress tracking."""
         # Save files synchronously and create task

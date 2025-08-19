@@ -72,9 +72,16 @@ class SanitizeKGExtractor(TransformComponent):
                 if not isinstance(name, str) or not name.strip():
                     name = "UNKNOWN_ENTITY"
                 props = _sanitize_properties(getattr(e, "properties", {}) or {})
-                sanitized_entities.append(
-                    EntityNode(name=name.strip()[:256], label=label, properties=props)
-                )
+                # Preserve original IDs to keep relation source/target mapping intact
+                eid = getattr(e, "id", None)
+                if eid is not None:
+                    sanitized_entities.append(
+                        EntityNode(id=eid, name=name.strip()[:256], label=label, properties=props)
+                    )
+                else:
+                    sanitized_entities.append(
+                        EntityNode(name=name.strip()[:256], label=label, properties=props)
+                    )
 
             sanitized_relations: List[Relation] = []
             for r in relations:
@@ -84,9 +91,16 @@ class SanitizeKGExtractor(TransformComponent):
                     continue
                 label = _sanitize_label(getattr(r, "label", None), fallback="RELATED_TO")
                 props = _sanitize_properties(getattr(r, "properties", {}) or {})
-                sanitized_relations.append(
-                    Relation(label=label, source_id=src, target_id=tgt, properties=props)
-                )
+                # Preserve any relation identifier if present (optional)
+                rid = getattr(r, "id", None)
+                if rid is not None:
+                    sanitized_relations.append(
+                        Relation(id=rid, label=label, source_id=src, target_id=tgt, properties=props)
+                    )
+                else:
+                    sanitized_relations.append(
+                        Relation(label=label, source_id=src, target_id=tgt, properties=props)
+                    )
 
             node.metadata[KG_NODES_KEY] = sanitized_entities
             node.metadata[KG_RELATIONS_KEY] = sanitized_relations

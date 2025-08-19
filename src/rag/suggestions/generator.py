@@ -4,7 +4,7 @@ import logging
 from typing import List
 
 from .catalog import QuestionSuggestion, store_questions, init_suggestion_collection
-from ..generator import generate_qa_pairs_for_doc
+from ..qa_generation import generate_qa_pairs_for_doc
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +78,7 @@ def generate_questions_only(
 請生成 {num_questions} 個簡潔問題："""
 
         # Get document chunks for context
-        from ..generator import fetch_doc_chunks
+        from ..qa_generation import fetch_doc_chunks
         records = fetch_doc_chunks(doc_id, limit=50)  # Reduced limit for speed
         
         if not records:

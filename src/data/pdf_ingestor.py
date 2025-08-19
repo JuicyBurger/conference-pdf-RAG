@@ -3,7 +3,7 @@
 import os
 import fitz  # PyMuPDF
 import pandas as pd
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 from rapidfuzz import fuzz, process
 from .node_builder import paragraphs_to_nodes, table_to_nodes, clean_text_for_comparison
 
@@ -50,7 +50,23 @@ def _detect_common_headers_footers(doc: fitz.Document, top_margin: float = 60.0,
     return headers, footers
 
 
-def _reconstruct_paragraph_from_dict(page: fitz.Page, headers: set, footers: set) -> str:
+def _span_intersects_any(span_bbox: Tuple[float, float, float, float], rects: List[Tuple[float, float, float, float]]) -> bool:
+    """Return True if span_bbox intersects any rect in rects."""
+    if not rects:
+        return False
+    x0, y0, x1, y1 = span_bbox
+    for rx0, ry0, rx1, ry1 in rects:
+        if not (x1 < rx0 or x0 > rx1 or y1 < ry0 or y0 > ry1):
+            return True
+    return False
+
+
+def _reconstruct_paragraph_from_dict(
+    page: fitz.Page,
+    headers: set,
+    footers: set,
+    skip_rects_mupdf: Optional[List[Tuple[float, float, float, float]]] = None,
+) -> str:
     """Reconstruct a cleaner paragraph string from PyMuPDF dict blocks, skipping common headers/footers."""
     blocks = page.get_text("dict").get("blocks", [])
     parts: List[str] = []
@@ -66,6 +82,18 @@ def _reconstruct_paragraph_from_dict(page: fitz.Page, headers: set, footers: set
             # Skip repetitive headers/footers
             if text in headers or text in footers:
                 continue
+            # Skip if any span falls inside a table region
+            if skip_rects_mupdf:
+                spans = line.get("spans", [])
+                intersects = False
+                for sp in spans:
+                    bbox = sp.get("bbox")
+                    if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+                        if _span_intersects_any(tuple(bbox), skip_rects_mupdf):
+                            intersects = True
+                            break
+                if intersects:
+                    continue
             # Simple join heuristic: if vertical gap small, add space; otherwise newline (later collapsed)
             y_candidates = []
             for span in line.get("spans", []):
@@ -86,7 +114,10 @@ def _reconstruct_paragraph_from_dict(page: fitz.Page, headers: set, footers: set
     return merged
 
 
-def extract_text_pages(pdf_path: str) -> List[Dict[str, Any]]:
+def extract_text_pages(
+    pdf_path: str,
+    skip_regions_pdf_by_page: Optional[Dict[int, List[Tuple[float, float, float, float]]]] = None,
+) -> List[Dict[str, Any]]:
     """
     Returns a list of {"page": int, "text": str} for each page using block-aware reconstruction,
     skipping repetitive headers/footers and reducing PyMuPDF line noise.
@@ -102,7 +133,15 @@ def extract_text_pages(pdf_path: str) -> List[Dict[str, Any]]:
             print(f"🔖 Detected footers to strip: {list(footers)[:3]}{'...' if len(footers)>3 else ''}")
         for pno in range(total_pages):
             page = doc.load_page(pno)
-            text = _reconstruct_paragraph_from_dict(page, headers, footers)
+            # Convert PDF-space skip rects (origin bottom-left) to MuPDF space (origin top-left)
+            skip_rects_mupdf: List[Tuple[float, float, float, float]] = []
+            if skip_regions_pdf_by_page and (pno + 1) in skip_regions_pdf_by_page:
+                height = page.rect.height
+                for (x0, y0, x1, y1) in skip_regions_pdf_by_page[pno + 1]:
+                    my0 = height - y1
+                    my1 = height - y0
+                    skip_rects_mupdf.append((x0, my0, x1, my1))
+            text = _reconstruct_paragraph_from_dict(page, headers, footers, skip_rects_mupdf)
             pages.append({"page": pno + 1, "text": text})
     return pages
 
@@ -223,10 +262,20 @@ def extract_tables_per_page(pdf_path: str) -> Dict[int, List[pd.DataFrame]]:
         
         print(f"📊 Processing {len(tables)} tables...")
         for table in tables:
-            page_no = table.page
+            page_no = int(table.page)
             if page_no not in tables_by_page:
                 tables_by_page[page_no] = []
             tables_by_page[page_no].append(table.df)
+        
+        # Fallback to stream if lattice found nothing
+        if not any(tables_by_page.values()):
+            print("📊 Lattice found no tables, falling back to Camelot (stream)...")
+            tables_stream = camelot.read_pdf(pdf_path, flavor='stream', pages=page_spec)
+            for table in tables_stream:
+                page_no = int(table.page)
+                if page_no not in tables_by_page:
+                    tables_by_page[page_no] = []
+                tables_by_page[page_no].append(table.df)
             
     except Exception as e:
         print(f"⚠️ Table extraction failed for {pdf_path}: {e}")
@@ -235,45 +284,110 @@ def extract_tables_per_page(pdf_path: str) -> Dict[int, List[pd.DataFrame]]:
     return tables_by_page
 
 
+def extract_tables_with_meta(pdf_path: str) -> Dict[int, List[Dict[str, Any]]]:
+    """Extract tables along with flavor, bbox (PDF coords), and Camelot accuracy.
+
+    Returns: { page_no: [ { 'df': DataFrame, 'flavor': str, 'accuracy': float|None, 'bbox_pdf': (x0,y0,x1,y1)|None } ] }
+    """
+    if not CAMELOT_AVAILABLE:
+        return {}
+
+    meta_by_page: Dict[int, List[Dict[str, Any]]] = {}
+    try:
+        # Select candidate pages
+        with fitz.open(pdf_path) as doc:
+            text_pages = [pno + 1 for pno in range(len(doc)) if doc.load_page(pno).get_text("text").strip()]
+        page_spec = 'all' if not text_pages else ",".join(str(i) for i in text_pages)
+
+        # Try lattice first
+        tables_lattice = camelot.read_pdf(pdf_path, flavor='lattice', pages=page_spec)
+        lattice_pages: Dict[int, List[Any]] = {}
+        for t in tables_lattice:
+            page_no = int(t.page)
+            lattice_pages.setdefault(page_no, []).append(t)
+
+        # Optionally also get stream if lattice is empty
+        stream_pages: Dict[int, List[Any]] = {}
+        if not lattice_pages:
+            print("📊 Using Camelot (stream) due to no lattice tables...")
+            tables_stream = camelot.read_pdf(pdf_path, flavor='stream', pages=page_spec)
+            for t in tables_stream:
+                page_no = int(t.page)
+                stream_pages.setdefault(page_no, []).append(t)
+
+        pages_set = set(list(lattice_pages.keys()) + list(stream_pages.keys()))
+        for page_no in sorted(pages_set):
+            entries: List[Dict[str, Any]] = []
+            for t in lattice_pages.get(page_no, []):
+                bbox = getattr(t, 'bbox', getattr(t, '_bbox', None))
+                acc = None
+                try:
+                    acc = (t.parsing_report or {}).get('accuracy')
+                except Exception:
+                    pass
+                entries.append({
+                    'df': t.df,
+                    'flavor': 'lattice',
+                    'accuracy': float(acc) if acc is not None else None,
+                    'bbox_pdf': tuple(bbox) if bbox else None,
+                })
+            for t in stream_pages.get(page_no, []):
+                bbox = getattr(t, 'bbox', getattr(t, '_bbox', None))
+                acc = None
+                try:
+                    acc = (t.parsing_report or {}).get('accuracy')
+                except Exception:
+                    pass
+                entries.append({
+                    'df': t.df,
+                    'flavor': 'stream',
+                    'accuracy': float(acc) if acc is not None else None,
+                    'bbox_pdf': tuple(bbox) if bbox else None,
+                })
+            if entries:
+                meta_by_page[page_no] = entries
+    except Exception as e:
+        print(f"⚠️ Table meta extraction failed: {e}")
+        return {}
+
+    return meta_by_page
+
+
 def deduplicate_content(paragraph_text: str, table_rows: List[str], threshold: float = 85.0) -> tuple[str, List[str]]:
     """
-    Remove duplicate content between paragraphs and table rows.
-    Uses RapidFuzz to find similar content and removes duplicates.
-    
-    Args:
-        paragraph_text: Full paragraph text
-        table_rows: List of table row texts
-        threshold: Similarity threshold (default 85%)
-        
-    Returns:
-        Tuple of (clean_paragraph_text, clean_table_rows)
+    Remove duplicate content by:
+      - Stripping sentences from paragraph_text that are highly similar to any table row text
+      - Keeping all table_rows (we prefer to retain structured table data)
+
+    Returns: (clean_paragraph_text, table_rows)
     """
-    if not table_rows or not paragraph_text:
+    if not paragraph_text:
         return paragraph_text, table_rows
-    
-    # Split paragraphs into sentences for comparison
+
     import re
+    # Split paragraphs into sentences and normalize
     sentences = re.split(r'[。！？；]', paragraph_text)
     sentences = [s.strip() for s in sentences if s.strip()]
-    
-    # Clean texts for comparison
+    if not sentences:
+        return paragraph_text, table_rows
+
     clean_sentences = [clean_text_for_comparison(s) for s in sentences]
-    clean_rows = [clean_text_for_comparison(row) for row in table_rows]
-    
-    # Find duplicates
-    unique_rows = []
-    for i, row in enumerate(table_rows):
-        clean_row = clean_rows[i]
-        
-        # Check if this row is similar to any sentence
-        matches = process.extract(clean_row, clean_sentences, scorer=fuzz.token_set_ratio, limit=1)
-        
-        if not matches or matches[0][1] < threshold:
-            unique_rows.append(row)
-        else:
-            print(f"🔄 Removed duplicate table row...")
-    
-    return paragraph_text, unique_rows
+    clean_rows = [clean_text_for_comparison(r) for r in (table_rows or [])]
+
+    keep_mask: List[bool] = [True] * len(sentences)
+    if clean_rows:
+        for i, cs in enumerate(clean_sentences):
+            # Compare this sentence to all row texts
+            match = process.extract(cs, clean_rows, scorer=fuzz.token_set_ratio, limit=1)
+            if match and match[0][1] >= threshold:
+                keep_mask[i] = False
+
+    kept_sentences = [s for s, k in zip(sentences, keep_mask) if k]
+    clean_paragraph_text = "。".join(kept_sentences)
+    if paragraph_text.endswith("。") and clean_paragraph_text and not clean_paragraph_text.endswith("。"):
+        clean_paragraph_text += "。"
+
+    return clean_paragraph_text, (table_rows or [])
 
 
 def build_page_nodes(pdf_path: str) -> List[Dict[str, Any]]:
@@ -286,9 +400,20 @@ def build_page_nodes(pdf_path: str) -> List[Dict[str, Any]]:
     Returns:
         List of nodes ready for indexing
     """
-    # Extract existing data
-    pages = extract_text_pages(pdf_path)
-    tables_map = extract_tables_per_page(pdf_path)
+    # Extract tables with metadata first and mask their regions from paragraph text
+    tables_meta = extract_tables_with_meta(pdf_path)
+    skip_regions_pdf_by_page: Dict[int, List[Tuple[float, float, float, float]]] = {}
+    for pno, entries in (tables_meta or {}).items():
+        for ent in entries:
+            bbox = ent.get('bbox_pdf')
+            if bbox and isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+                skip_regions_pdf_by_page.setdefault(pno, []).append(tuple(bbox))
+
+    pages = extract_text_pages(pdf_path, skip_regions_pdf_by_page=skip_regions_pdf_by_page)
+    # Build simple tables map for node conversion
+    tables_map: Dict[int, List[pd.DataFrame]] = {}
+    for pno, entries in (tables_meta or {}).items():
+        tables_map[pno] = [ent['df'] for ent in entries]
     
     all_nodes = []
     total_pages = len(pages)
@@ -303,6 +428,7 @@ def build_page_nodes(pdf_path: str) -> List[Dict[str, Any]]:
         
         # Convert tables to row texts
         all_table_rows = []
+        all_table_cells = []
         table_nodes = []
         
         for table_id, table_df in enumerate(page_tables):
@@ -313,9 +439,18 @@ def build_page_nodes(pdf_path: str) -> List[Dict[str, Any]]:
             # Collect row texts for deduplication
             row_texts = [node["text"] for node in table_row_nodes]
             all_table_rows.extend(row_texts)
+            # Collect raw cell texts for stricter dedup
+            try:
+                for cell in table_df.values.flatten():
+                    s = str(cell).strip()
+                    if s:
+                        all_table_cells.append(s)
+            except Exception:
+                pass
         
-        # Deduplicate content
-        clean_paragraph, clean_table_rows = deduplicate_content(paragraph_text, all_table_rows)
+        # Deduplicate content using both generated row texts and raw cell texts
+        dedup_basis = list(dict.fromkeys(all_table_rows + all_table_cells))
+        clean_paragraph, clean_table_rows = deduplicate_content(paragraph_text, dedup_basis)
         
         # Create paragraph nodes
         paragraph_nodes = paragraphs_to_nodes(page_no, clean_paragraph)

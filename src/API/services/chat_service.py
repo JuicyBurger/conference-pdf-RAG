@@ -25,6 +25,10 @@ import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 from src.models.embedder import embed
 from src.config import QDRANT_URL, QDRANT_API_KEY
+from src.rag.utils import handle_errors, DatabaseError, setup_logger
+
+# Configure logging
+logger = setup_logger(__name__)
 
 
 class ChatBuffer:
@@ -179,43 +183,63 @@ class AsyncChatService:
     
     CHAT_COLLECTION = os.getenv("QDRANT_CHAT_DB", "chat_messages")
     ROOMS_COLLECTION = os.getenv("QDRANT_ROOMS_DB", "chat_rooms")
-    VECTOR_SIZE = 768
     
     def __init__(self):
+        # Get vector size from the current embedding model
+        try:
+            from src.models.embedder import model
+            self.VECTOR_SIZE = model.get_sentence_embedding_dimension()
+            logger.info(f"✅ Chat service using vector size: {self.VECTOR_SIZE}")
+        except Exception as e:
+            logger.error(f"❌ Could not get embedding dimension: {e}")
+            logger.error("❌ Chat service initialization failed - embedding model not available")
+            # Don't set a fallback - let the service fail gracefully
+            self.VECTOR_SIZE = None
+        
         self.executor = ThreadPoolExecutor(max_workers=4)
         self.buffer = ChatBuffer()
         self.fallback = ChatFallback()
         self.rooms = {}  # In-memory room metadata cache
         
         # Initialize Qdrant client with error handling
+        self._initialize_qdrant_client()
+    
+    @handle_errors(error_class=DatabaseError, reraise=False)
+    def _initialize_qdrant_client(self):
+        """Initialize Qdrant client with error handling."""
         try:
             self.client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
-            print(f"✅ Qdrant client connected")
+            logger.info("✅ Qdrant client connected")
             
             # Ensure all collections exist
             self._ensure_collections()
             self.ensure_document_collection()
             
-            print(f"✅ Qdrant chat service initialized")
+            logger.info("✅ Qdrant chat service initialized")
         except Exception as e:
-            print(f"❌ Failed to initialize Qdrant client: {e}")
+            logger.error(f"❌ Failed to initialize Qdrant client: {e}")
             # Create a dummy client that will fail gracefully
             self.client = None
     
+    @handle_errors(error_class=DatabaseError, reraise=False)
     def _ensure_collections(self):
         """Ensure chat and rooms collections exist in Qdrant with proper indexes"""
         if not self.client:
+            return
+        
+        if self.VECTOR_SIZE is None:
+            logger.error("❌ Cannot create collections - vector size not available")
             return
             
         try:
             # Get existing collections
             collections = self.client.get_collections()
             collection_names = [col.name for col in collections.collections]
-            print(f"📋 Existing collections: {collection_names}")
+            logger.info(f"📋 Existing collections: {collection_names}")
             
             # Ensure chat messages collection
             if self.CHAT_COLLECTION not in collection_names:
-                print(f"🆕 Creating chat collection: {self.CHAT_COLLECTION}")
+                logger.info(f"🆕 Creating chat collection: {self.CHAT_COLLECTION}")
                 self.client.create_collection(
                     collection_name=self.CHAT_COLLECTION,
                     vectors_config=VectorParams(
@@ -223,9 +247,9 @@ class AsyncChatService:
                         distance=Distance.COSINE
                     )
                 )
-                print(f"✅ Created chat collection: {self.CHAT_COLLECTION}")
+                logger.info(f"✅ Created chat collection: {self.CHAT_COLLECTION}")
             else:
-                print(f"✅ Chat collection exists: {self.CHAT_COLLECTION}")
+                logger.info(f"✅ Chat collection exists: {self.CHAT_COLLECTION}")
             
             # Create payload indexes for chat collection
             try:
@@ -235,13 +259,13 @@ class AsyncChatService:
                     field_name="room_id",
                     field_schema=PayloadSchemaType.KEYWORD
                 )
-                print(f"✅ Created room_id index for chat collection")
+                logger.info(f"✅ Created room_id index for chat collection")
             except Exception as e:
-                print(f"⚠️ Room_id index may already exist: {e}")
+                logger.warning(f"⚠️ Room_id index may already exist: {e}")
             
             # Ensure rooms collection
             if self.ROOMS_COLLECTION not in collection_names:
-                print(f"🆕 Creating rooms collection: {self.ROOMS_COLLECTION}")
+                logger.info(f"🆕 Creating rooms collection: {self.ROOMS_COLLECTION}")
                 self.client.create_collection(
                     collection_name=self.ROOMS_COLLECTION,
                     vectors_config=VectorParams(
@@ -249,20 +273,21 @@ class AsyncChatService:
                         distance=Distance.COSINE
                     )
                 )
-                print(f"✅ Created rooms collection: {self.ROOMS_COLLECTION}")
+                logger.info(f"✅ Created rooms collection: {self.ROOMS_COLLECTION}")
             else:
-                print(f"✅ Rooms collection exists: {self.ROOMS_COLLECTION}")
+                logger.info(f"✅ Rooms collection exists: {self.ROOMS_COLLECTION}")
             
             # Validate collections after creation
             self._validate_collections()
                 
         except Exception as e:
-            print(f"⚠️ Error ensuring collections: {e}")
+            logger.error(f"⚠️ Error ensuring collections: {e}")
     
+    @handle_errors(error_class=DatabaseError, fallback_return=False)
     def _validate_collections(self):
         """Validate that collections exist and are properly configured"""
         if not self.client:
-            print("❌ Qdrant client not available for validation")
+            logger.error("❌ Qdrant client not available for validation")
             return False
         
         try:
@@ -274,52 +299,52 @@ class AsyncChatService:
             
             # Validate chat collection
             if self.CHAT_COLLECTION not in collection_names:
-                print(f"❌ Chat collection '{self.CHAT_COLLECTION}' not found")
+                logger.error(f"❌ Chat collection '{self.CHAT_COLLECTION}' not found")
                 validation_passed = False
             else:
                 try:
                     chat_collection = self.client.get_collection(self.CHAT_COLLECTION)
-                    print(f"✅ Chat collection validated: {chat_collection.points_count} points")
+                    logger.info(f"✅ Chat collection validated: {chat_collection.points_count} points")
                 except Exception as e:
-                    print(f"❌ Error validating chat collection: {e}")
+                    logger.error(f"❌ Error validating chat collection: {e}")
                     validation_passed = False
             
             # Validate rooms collection
             if self.ROOMS_COLLECTION not in collection_names:
-                print(f"❌ Rooms collection '{self.ROOMS_COLLECTION}' not found")
+                logger.error(f"❌ Rooms collection '{self.ROOMS_COLLECTION}' not found")
                 validation_passed = False
             else:
                 try:
                     rooms_collection = self.client.get_collection(self.ROOMS_COLLECTION)
-                    print(f"✅ Rooms collection validated: {rooms_collection.points_count} points")
+                    logger.info(f"✅ Rooms collection validated: {rooms_collection.points_count} points")
                 except Exception as e:
-                    print(f"❌ Error validating rooms collection: {e}")
+                    logger.error(f"❌ Error validating rooms collection: {e}")
                     validation_passed = False
             
             # Validate main document collection (for RAG)
             try:
                 from src.config import QDRANT_COLLECTION
                 if QDRANT_COLLECTION not in collection_names:
-                    print(f"⚠️ Main document collection '{QDRANT_COLLECTION}' not found")
-                    print("💡 This collection is used for RAG document retrieval")
+                    logger.warning(f"⚠️ Main document collection '{QDRANT_COLLECTION}' not found")
+                    logger.info("💡 This collection is used for RAG document retrieval")
                 else:
                     try:
                         doc_collection = self.client.get_collection(QDRANT_COLLECTION)
-                        print(f"✅ Document collection validated: {doc_collection.points_count} points")
+                        logger.info(f"✅ Document collection validated: {doc_collection.points_count} points")
                     except Exception as e:
-                        print(f"❌ Error validating document collection: {e}")
+                        logger.error(f"❌ Error validating document collection: {e}")
             except ImportError:
-                print("⚠️ Could not import QDRANT_COLLECTION config")
+                logger.warning("⚠️ Could not import QDRANT_COLLECTION config")
             
             if validation_passed:
-                print("✅ All collections validated successfully")
+                logger.info("✅ All collections validated successfully")
             else:
-                print("❌ Collection validation failed")
+                logger.error("❌ Collection validation failed")
             
             return validation_passed
             
         except Exception as e:
-            print(f"❌ Error during collection validation: {e}")
+            logger.error(f"❌ Error during collection validation: {e}")
             return False
     
     def ensure_document_collection(self):
@@ -407,6 +432,7 @@ class AsyncChatService:
             print(f"❌ Error recreating collections: {e}")
             return False
     
+    @handle_errors(error_class=DatabaseError, fallback_return={})
     async def create_room(self, first_message: str, user_id: str = None) -> dict:
         """Create a new chat room with auto-generated ID and title"""
         room_id = str(uuid.uuid4())
@@ -453,9 +479,9 @@ class AsyncChatService:
                     self.executor,
                     partial(self.client.upsert, collection_name=self.ROOMS_COLLECTION, points=[point])
                 )
-                print(f"✅ Created room {room_id[:8]} with title: {room_title}")
+                logger.info(f"✅ Created room {room_id[:8]} with title: {room_title}")
             except Exception as e:
-                print(f"⚠️ Failed to store room in Qdrant: {e}")
+                logger.warning(f"⚠️ Failed to store room in Qdrant: {e}")
         
         return room_data
     
@@ -599,6 +625,7 @@ class AsyncChatService:
                 except Exception as e:
                     print(f"⚠️ Failed to update room in Qdrant: {e}")
     
+    @handle_errors(error_class=DatabaseError, reraise=True)
     async def add_message(self, room_id: str, role: str, content: str, user_id: str = None, files: List[str] = None) -> str:
         """Add message to Qdrant and buffer"""
         
@@ -634,9 +661,9 @@ class AsyncChatService:
                     self.executor,
                     partial(self.client.upsert, collection_name=self.CHAT_COLLECTION, points=[point])
                 )
-                print(f"💾 Saved message {msg_id} to Qdrant")
+                logger.info(f"💾 Saved message {msg_id} to Qdrant")
             else:
-                print(f"⚠️ Qdrant not available, message {msg_id} only saved to buffer")
+                logger.warning(f"⚠️ Qdrant not available, message {msg_id} only saved to buffer")
             
             # Prepare message for buffer and response (new structure)
             message_for_response = {
@@ -664,7 +691,7 @@ class AsyncChatService:
             return msg_id
             
         except Exception as e:
-            print(f"❌ Error adding message: {e}")
+            logger.error(f"❌ Error adding message: {e}")
             raise
     
     async def get_chat_history(self, room_id: str, recency_k: int = 50) -> List[dict]:

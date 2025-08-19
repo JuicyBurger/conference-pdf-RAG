@@ -35,6 +35,11 @@ def create_app():
     # Configuration
     app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB max request size
     app.config['UPLOAD_FOLDER'] = 'data/uploads'
+    app.config['PERMANENT_SESSION_LIFETIME'] = 300  # 5 minutes session lifetime
+    
+    # Set longer timeout for requests (especially for LLM calls)
+    app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
+    app.config['TEMPLATES_AUTO_RELOAD'] = True
     
     # Enable CORS for all routes
     CORS(app, origins="*", supports_credentials=False)
@@ -102,8 +107,8 @@ if __name__ == '__main__':
     
     # Bootstrap jieba with document IDs from Qdrant
     try:
-        from src.rag.retriever import bootstrap_jieba_from_qdrant
-        bootstrap_success = bootstrap_jieba_from_qdrant()
+        from src.rag.retrieval.retrieval_service import retrieval_service
+        bootstrap_success = retrieval_service.bootstrap_jieba_from_qdrant()
         if bootstrap_success:
             print("✅ Successfully bootstrapped jieba with document IDs")
         else:
