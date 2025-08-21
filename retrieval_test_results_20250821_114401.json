@@ -1,0 +1,619 @@
+{
+  "test_info": {
+    "timestamp": "2025-08-21T11:44:01.323275",
+    "total_questions": 20,
+    "api_base_url": "http://127.0.0.1:5000"
+  },
+  "results": [
+    {
+      "question_id": 1,
+      "difficulty": "易",
+      "question": "113 年度的總經理是誰？",
+      "response": "目前提供的節錄內容並未包含「113 年度總經理」的姓名。節錄主要涉及公司治理報告、職稱欄位與總經理及副總經理的酬金資訊，屬於**公司治理與薪酬資料**。若想查詢 113 年度總經理的姓名，請提供更具體的關鍵詞（如「總經理姓名」）或指明包含該資訊的頁碼。",
+      "evaluation": {
+        "response_length": 126,
+        "has_error": false,
+        "has_numbers": true,
+        "has_percentage": false,
+        "has_chinese_numbers": false,
+        "difficulty": "易",
+        "keyword_relevance": 1.0,
+        "total_keywords": 2,
+        "matched_keywords": 2,
+        "quality_score": 9.0
+      },
+      "timestamp": "2025-08-21T11:38:02.862749"
+    },
+    {
+      "question_id": 2,
+      "difficulty": "易",
+      "question": "113 年度總經理 A+B+C+D 四項酬金總額為多少？佔稅後純益的比例為多少？",
+      "response": "目前提供的節錄內容並未包含「113 年度總經理 A、B、C、D 四項酬金總額」或「佔稅後純益比例」的具體數字。節錄主要描述薪酬結構、公司治理報告中的酬金披露規定，以及副總經理職務空缺等資訊，屬於**酬金結構與治理披露**類別，但缺乏您所需的具體金額與比例。\n\n建議您提供更具體的關鍵詞（如「總經理酬金」「A+B+C+D」）或直接指出包含該數據的頁碼，以便我們能準確查找並回答。",
+      "evaluation": {
+        "response_length": 188,
+        "has_error": false,
+        "has_numbers": true,
+        "has_percentage": false,
+        "has_chinese_numbers": true,
+        "difficulty": "易",
+        "keyword_relevance": 1.0,
+        "total_keywords": 5,
+        "matched_keywords": 5,
+        "quality_score": 9.5
+      },
+      "timestamp": "2025-08-21T11:38:19.083513"
+    },
+    {
+      "question_id": 3,
+      "difficulty": "易",
+      "question": "公司 113 年度個體稅後純益（仟元）為多少？",
+      "response": "公司 113 年度個體稅後純益為 **1,049,130**（仟元）【20250821_112313_113_20240531-16-18 第1頁】。",
+      "evaluation": {
+        "response_length": 75,
+        "has_error": false,
+        "has_numbers": true,
+        "has_percentage": false,
+        "has_chinese_numbers": false,
+        "difficulty": "易",
+        "keyword_relevance": 1.0,
+        "total_keywords": 2,
+        "matched_keywords": 2,
+        "quality_score": 9.0
+      },
+      "timestamp": "2025-08-21T11:38:30.751364"
+    },
+    {
+      "question_id": 4,
+      "difficulty": "易",
+      "question": "副總經理職務在 113 年度是否有人任職（是否空缺）？",
+      "response": "副總經理職務在 113 年度為空缺。  \n[20250821_112313_113_20240531-16-18 第1頁]",
+      "evaluation": {
+        "response_length": 61,
+        "has_error": false,
+        "has_numbers": true,
+        "has_percentage": false,
+        "has_chinese_numbers": false,
+        "difficulty": "易",
+        "keyword_relevance": 1.0,
+        "total_keywords": 2,
+        "matched_keywords": 2,
+        "quality_score": 9.0
+      },
+      "timestamp": "2025-08-21T11:38:47.299028"
+    },
+    {
+      "question_id": 5,
+      "difficulty": "易",
+      "question": "113 年度董事會共召開幾次會議？",
+      "response": "該節錄內容主要為財務數據、董事酬金比例、實際出席率以及公司治理報告的相關說明，並未提及 113 年度董事會召開會議的次數。若需查詢此資訊，建議您提供更具體的關鍵字（如「召開次數」或「會議次數」）或指定包含此資料的頁碼。",
+      "evaluation": {
+        "response_length": 109,
+        "has_error": false,
+        "has_numbers": true,
+        "has_percentage": false,
+        "has_chinese_numbers": false,
+        "difficulty": "易",
+        "keyword_relevance": 1.0,
+        "total_keywords": 3,
+        "matched_keywords": 3,
+        "quality_score": 9.0
+      },
+      "timestamp": "2025-08-21T11:39:06.218328"
+    },
+    {
+      "question_id": 6,
+      "difficulty": "易",
+      "question": "哪位獨立董事的出席率為 80%？其實際出席與委託出席次數分別為多少？",
+      "response": "目前提供的文件節錄中並未包含任何關於獨立董事出席率、實際出席次數或委託出席次數的資訊。  \n- 第1頁：僅列出總經理及副總經理酬金、職稱欄位與註解。  \n- 第2頁：僅列出職稱欄位（含三位獨立董事）。  \n- 第3頁：僅說明董事會績效評估結果，未提及出席率。  \n\n建議您提供更具體的關鍵詞（如「出席率」「實際出席」「委託出席」）或指明包含該資訊的頁碼，以便進一步查找。",
+      "evaluation": {
+        "response_length": 185,
+        "has_error": false,
+        "has_numbers": true,
+        "has_percentage": false,
+        "has_chinese_numbers": true,
+        "difficulty": "易",
+        "keyword_relevance": 0.6666666666666666,
+        "total_keywords": 3,
+        "matched_keywords": 2,
+        "quality_score": 8.5
+      },
+      "timestamp": "2025-08-21T11:39:21.856726"
+    },
+    {
+      "question_id": 7,
+      "difficulty": "易",
+      "question": "請列出董事會出席情形表中的所有獨立董事姓名。",
+      "response": "目前提供的節錄中，只列出了「職稱」欄位的內容（如董事長、獨立董事等），並未包含任何董事姓名。  \n因此無法直接列出「董事會出席情形表」中的所有獨立董事姓名。  \n\n請您提供包含董事姓名的頁碼或更具體的關鍵詞（例如「獨立董事姓名」或「董事會出席情形表」所在頁面），以便我為您查找並列出相關姓名。",
+      "evaluation": {
+        "response_length": 146,
+        "has_error": true,
+        "has_numbers": false,
+        "has_percentage": false,
+        "has_chinese_numbers": false,
+        "difficulty": "易",
+        "keyword_relevance": 1.0,
+        "total_keywords": 2,
+        "matched_keywords": 2,
+        "quality_score": 5.0
+      },
+      "timestamp": "2025-08-21T11:39:38.302525"
+    },
+    {
+      "question_id": 8,
+      "difficulty": "中",
+      "question": "113 年董事會／各委員會績效評估結果是於哪一日期報告至各會議？",
+      "response": "113 年董事會及各委員會績效評估結果已於 **113 年 11 月 8 日** 提報至各委員會及董事會。  \n[20250821_112313_113_20240531-16-18 第3頁]",
+      "evaluation": {
+        "response_length": 96,
+        "has_error": false,
+        "has_numbers": true,
+        "has_percentage": false,
+        "has_chinese_numbers": false,
+        "difficulty": "中",
+        "keyword_relevance": 0.75,
+        "total_keywords": 4,
+        "matched_keywords": 3,
+        "quality_score": 8.25
+      },
+      "timestamp": "2025-08-21T11:39:52.286498"
+    },
+    {
+      "question_id": 9,
+      "difficulty": "中",
+      "question": "113 年度評鑑平均總分為何？（a）整體董事會；（b）個別董事成員。",
+      "response": "抱歉，您提供的節錄內容僅包含文件標題、表格欄位名稱以及簡短說明，並未包含「113 年度評鑑平均總分」的實際數值。  \n該節錄屬於公司治理報告的結構性資訊（如章節標題、表格欄位），並未提供評鑑分數。  \n\n若您想查詢「113 年度評鑑平均總分」的具體數字，請提供包含該數據的具體頁碼或關鍵字（例如「評鑑平均總分」或「董事會評鑑」等），以便我們能夠精確定位並回覆。",
+      "evaluation": {
+        "response_length": 180,
+        "has_error": true,
+        "has_numbers": true,
+        "has_percentage": false,
+        "has_chinese_numbers": false,
+        "difficulty": "中",
+        "keyword_relevance": 1.0,
+        "total_keywords": 2,
+        "matched_keywords": 2,
+        "quality_score": 6.0
+      },
+      "timestamp": "2025-08-21T11:40:07.503339"
+    },
+    {
+      "question_id": 10,
+      "difficulty": "中",
+      "question": "三大功能性委員會（薪資報酬、審計、提名）的平均總分各為多少？",
+      "response": "目前提供的節錄內容並未包含「薪資報酬委員會」「審計委員會」以及「提名委員會」的平均總分資訊。  \n- 節錄主要描述整體董事會（由提名委員會評估）的平均分數與總分，以及董事職稱列表，並未列出三大功能性委員會的評估結果。  \n\n若您想查詢三大功能性委員會的平均總分，請提供包含該資訊的頁碼或更具體的關鍵字（例如「薪資報酬委員會平均總分」或「審計委員會評估」等），以便我能為您找到正確的資料。",
+      "evaluation": {
+        "response_length": 193,
+        "has_error": false,
+        "has_numbers": false,
+        "has_percentage": false,
+        "has_chinese_numbers": true,
+        "difficulty": "中",
+        "keyword_relevance": 1.0,
+        "total_keywords": 2,
+        "matched_keywords": 2,
+        "quality_score": 8.5
+      },
+      "timestamp": "2025-08-21T11:40:25.002258"
+    },
+    {
+      "question_id": 11,
+      "difficulty": "中",
+      "question": "在兩年度比較中，113 年董事酬金總額為多少？相較 112 年變動多少？",
+      "response": "目前提供的節錄內容並未包含 112 年與 113 年董事酬金總額的具體數值。  \n- 第一頁的「關鍵數據總結（112‑113 年）」僅列出個體稅後純益及酬金佔純益比例，並未呈現董事酬金總額。  \n- 第二頁的「評估項目」內容屬於公司治理評估指標，與酬金數值無關。  \n- 第三頁則說明總經理及副總經理之酬金，並未提及董事酬金。\n\n建議您提供包含「董事酬金總額」或「董事酬金明細」的頁碼或關鍵詞，以便進一步查找相關數據。",
+      "evaluation": {
+        "response_length": 209,
+        "has_error": false,
+        "has_numbers": true,
+        "has_percentage": false,
+        "has_chinese_numbers": true,
+        "difficulty": "中",
+        "keyword_relevance": 1.0,
+        "total_keywords": 3,
+        "matched_keywords": 3,
+        "quality_score": 9.5
+      },
+      "timestamp": "2025-08-21T11:40:46.346949"
+    },
+    {
+      "question_id": 12,
+      "difficulty": "中",
+      "question": "（副）總經理酬金總額占比自 112→113 年下降的主因為何？",
+      "response": "所提供的節錄主要描述了「總經理及副總經理之酬金」的金額單位、職務空缺情形，以及公司在特定情況下須揭露董事姓名及酬金的規定（如稅後虧損、持股成數不足、設質比率等）。這些內容屬於**酬金披露與合規規範**，並未包含 112 年至 113 年總經理酬金占比變動的數值或原因分析。\n\n建議您提供更具體的關鍵詞（如「酬金占比下降原因」）或指向包含該分析的頁碼，以便進一步查找相關資訊。",
+      "evaluation": {
+        "response_length": 187,
+        "has_error": false,
+        "has_numbers": true,
+        "has_percentage": false,
+        "has_chinese_numbers": true,
+        "difficulty": "中",
+        "keyword_relevance": 1.0,
+        "total_keywords": 4,
+        "matched_keywords": 4,
+        "quality_score": 9.5
+      },
+      "timestamp": "2025-08-21T11:41:06.682056"
+    },
+    {
+      "question_id": 13,
+      "difficulty": "中",
+      "question": "本公司董事酬金占稅後純益之比例在 112 年與 113 年分別為何？",
+      "response": "本公司董事酬金占稅後純益之比例為：\n\n- 112 年：4.45%  \n- 113 年：4.39%  \n\n來源：[20250821_112313_113_20240531-16-18 第1頁]",
+      "evaluation": {
+        "response_length": 95,
+        "has_error": false,
+        "has_numbers": true,
+        "has_percentage": true,
+        "has_chinese_numbers": false,
+        "difficulty": "中",
+        "keyword_relevance": 1.0,
+        "total_keywords": 5,
+        "matched_keywords": 5,
+        "quality_score": 9.0
+      },
+      "timestamp": "2025-08-21T11:41:22.298094"
+    },
+    {
+      "question_id": 14,
+      "difficulty": "中",
+      "question": "（副）總經理酬金占稅後純益之比例在 112 年與 113 年分別為何？",
+      "response": "目前提供的節錄中並未包含「副總經理酬金占稅後純益之比例」的具體數值。  \n- 節錄中僅列出「關鍵數據總結（112‑113 年）」的表格框架，並未顯示各年度的比例數字。  \n- 「公司治理報告」部分亦僅說明酬金單位與註記，未提供比例資訊。\n\n建議您提供包含該比例數字的具體頁碼或關鍵詞（例如「酬金佔純益比例」或「副總經理酬金」等），以便進一步查詢。",
+      "evaluation": {
+        "response_length": 173,
+        "has_error": false,
+        "has_numbers": true,
+        "has_percentage": false,
+        "has_chinese_numbers": true,
+        "difficulty": "中",
+        "keyword_relevance": 1.0,
+        "total_keywords": 5,
+        "matched_keywords": 5,
+        "quality_score": 9.5
+      },
+      "timestamp": "2025-08-21T11:41:40.764102"
+    },
+    {
+      "question_id": 15,
+      "difficulty": "中",
+      "question": "依公司政策，董事酬勞得自年度盈餘提列之上限比例為多少？",
+      "response": "董事酬勞得自年度盈餘提列之上限比例為 **3%**。【[20250821_112313_113_20240531-16-18 第1頁]】",
+      "evaluation": {
+        "response_length": 68,
+        "has_error": false,
+        "has_numbers": true,
+        "has_percentage": true,
+        "has_chinese_numbers": false,
+        "difficulty": "中",
+        "keyword_relevance": 0.75,
+        "total_keywords": 4,
+        "matched_keywords": 3,
+        "quality_score": 8.25
+      },
+      "timestamp": "2025-08-21T11:41:58.072656"
+    },
+    {
+      "question_id": 16,
+      "difficulty": "中",
+      "question": "依公司政策，當年度有盈餘時，員工酬勞應提列之比例為多少？",
+      "response": "員工酬勞依公司章程規定，當年度有盈餘時應提撥 **1%** 為員工酬勞。【20250821_112313_113_20240531-16-18 第1頁】",
+      "evaluation": {
+        "response_length": 76,
+        "has_error": false,
+        "has_numbers": true,
+        "has_percentage": true,
+        "has_chinese_numbers": false,
+        "difficulty": "中",
+        "keyword_relevance": 1.0,
+        "total_keywords": 4,
+        "matched_keywords": 4,
+        "quality_score": 9.0
+      },
+      "timestamp": "2025-08-21T11:42:12.671828"
+    },
+    {
+      "question_id": 17,
+      "difficulty": "中",
+      "question": "113 年度分配予總經理之員工酬勞（股票／現金／合計）各為多少？其占比為多少？",
+      "response": "目前提供的節錄內容主要說明了經理人薪酬結構、公司治理報告的格式以及披露規則，並未包含「113 年度分配予總經理之員工酬勞（股票／現金／合計）各為多少」或其占比的具體數值。  \n建議您提供包含該數據的具體頁碼或關鍵詞（例如「總經理酬金表」、「員工酬勞明細」等），以便進一步查詢。",
+      "evaluation": {
+        "response_length": 138,
+        "has_error": false,
+        "has_numbers": true,
+        "has_percentage": false,
+        "has_chinese_numbers": true,
+        "difficulty": "中",
+        "keyword_relevance": 1.0,
+        "total_keywords": 4,
+        "matched_keywords": 4,
+        "quality_score": 9.5
+      },
+      "timestamp": "2025-08-21T11:42:37.100756"
+    },
+    {
+      "question_id": 18,
+      "difficulty": "難",
+      "question": "何種情形需要揭露個別董事酬金資訊？請列舉任兩項條件。",
+      "response": "根據您提供的節錄，只有一項明確列出的情形需要揭露個別董事酬金資訊：\n\n1. **最近三年度個體或個別財務報告曾出現稅後虧損者**【20250821_112313_113_20240531-16-18 第1頁】。\n\n若您需要第二項條件，請提供更完整或其他頁碼的相關段落，以便進一步確認。",
+      "evaluation": {
+        "response_length": 142,
+        "has_error": false,
+        "has_numbers": true,
+        "has_percentage": false,
+        "has_chinese_numbers": true,
+        "difficulty": "難",
+        "keyword_relevance": 1.0,
+        "total_keywords": 3,
+        "matched_keywords": 3,
+        "quality_score": 9.5
+      },
+      "timestamp": "2025-08-21T11:43:22.309178"
+    },
+    {
+      "question_id": 19,
+      "difficulty": "難",
+      "question": "因設置審計委員會而不適用證券交易法第 14 條之 3 之規定時，實際適用的是哪一條？",
+      "response": "設置審計委員會時，證券交易法第 14 條之 3 不適用，實際適用的是「證券交易法第 14 條之 5」【20250821_112313_113_20240531-16-18 第2頁】。",
+      "evaluation": {
+        "response_length": 91,
+        "has_error": false,
+        "has_numbers": true,
+        "has_percentage": false,
+        "has_chinese_numbers": false,
+        "difficulty": "難",
+        "keyword_relevance": 0.6666666666666666,
+        "total_keywords": 3,
+        "matched_keywords": 2,
+        "quality_score": 8.0
+      },
+      "timestamp": "2025-08-21T11:43:39.670589"
+    },
+    {
+      "question_id": 20,
+      "difficulty": "難",
+      "question": "根據提供的數據，驗證總經理 3,640 仟元約等於 113 年個體稅後純益的 0.35%。請寫出計算式（分數）並給出結果。",
+      "response": "所提供的節錄主要包含「職稱、姓名、股票金額、現金金額」以及「總經理及副總經理之酬金」等資訊，並未列出 113 年個體稅後純益的金額。  \n因此無法根據這些資料計算「3,640 仟元 ≈ 0.35% 的個體稅後純益」的驗證式。  \n\n建議您提供包含 113 年個體稅後純益數值的頁碼或關鍵字，以便進行正確的計算。",
+      "evaluation": {
+        "response_length": 155,
+        "has_error": true,
+        "has_numbers": true,
+        "has_percentage": true,
+        "has_chinese_numbers": false,
+        "difficulty": "難",
+        "keyword_relevance": 1.0,
+        "total_keywords": 4,
+        "matched_keywords": 4,
+        "quality_score": 6.0
+      },
+      "timestamp": "2025-08-21T11:44:00.317155"
+    }
+  ],
+  "summary": {
+    "test_summary": {
+      "total_questions": 20,
+      "total_time_seconds": 380.86283826828003,
+      "avg_time_per_question": 19.043141913414,
+      "success_rate_percent": 85.0,
+      "error_count": 3
+    },
+    "quality_metrics": {
+      "overall_avg_score": 8.475,
+      "min_score": 5.0,
+      "max_score": 9.5,
+      "avg_response_length": 134.65,
+      "avg_keyword_relevance": 0.9416666666666667
+    },
+    "difficulty_breakdown": {
+      "易": {
+        "count": 7,
+        "avg_score": 8.428571428571429,
+        "min_score": 5.0,
+        "max_score": 9.5
+      },
+      "中": {
+        "count": 10,
+        "avg_score": 8.7,
+        "min_score": 6.0,
+        "max_score": 9.5
+      },
+      "難": {
+        "count": 3,
+        "avg_score": 7.833333333333333,
+        "min_score": 6.0,
+        "max_score": 9.5
+      }
+    },
+    "top_performers": [
+      {
+        "question_id": 2,
+        "difficulty": "易",
+        "question": "113 年度總經理 A+B+C+D 四項酬金總額為多少？佔稅後純益的比例為多少？",
+        "response": "目前提供的節錄內容並未包含「113 年度總經理 A、B、C、D 四項酬金總額」或「佔稅後純益比例」的具體數字。節錄主要描述薪酬結構、公司治理報告中的酬金披露規定，以及副總經理職務空缺等資訊，屬於**酬金結構與治理披露**類別，但缺乏您所需的具體金額與比例。\n\n建議您提供更具體的關鍵詞（如「總經理酬金」「A+B+C+D」）或直接指出包含該數據的頁碼，以便我們能準確查找並回答。",
+        "evaluation": {
+          "response_length": 188,
+          "has_error": false,
+          "has_numbers": true,
+          "has_percentage": false,
+          "has_chinese_numbers": true,
+          "difficulty": "易",
+          "keyword_relevance": 1.0,
+          "total_keywords": 5,
+          "matched_keywords": 5,
+          "quality_score": 9.5
+        },
+        "timestamp": "2025-08-21T11:38:19.083513"
+      },
+      {
+        "question_id": 11,
+        "difficulty": "中",
+        "question": "在兩年度比較中，113 年董事酬金總額為多少？相較 112 年變動多少？",
+        "response": "目前提供的節錄內容並未包含 112 年與 113 年董事酬金總額的具體數值。  \n- 第一頁的「關鍵數據總結（112‑113 年）」僅列出個體稅後純益及酬金佔純益比例，並未呈現董事酬金總額。  \n- 第二頁的「評估項目」內容屬於公司治理評估指標，與酬金數值無關。  \n- 第三頁則說明總經理及副總經理之酬金，並未提及董事酬金。\n\n建議您提供包含「董事酬金總額」或「董事酬金明細」的頁碼或關鍵詞，以便進一步查找相關數據。",
+        "evaluation": {
+          "response_length": 209,
+          "has_error": false,
+          "has_numbers": true,
+          "has_percentage": false,
+          "has_chinese_numbers": true,
+          "difficulty": "中",
+          "keyword_relevance": 1.0,
+          "total_keywords": 3,
+          "matched_keywords": 3,
+          "quality_score": 9.5
+        },
+        "timestamp": "2025-08-21T11:40:46.346949"
+      },
+      {
+        "question_id": 12,
+        "difficulty": "中",
+        "question": "（副）總經理酬金總額占比自 112→113 年下降的主因為何？",
+        "response": "所提供的節錄主要描述了「總經理及副總經理之酬金」的金額單位、職務空缺情形，以及公司在特定情況下須揭露董事姓名及酬金的規定（如稅後虧損、持股成數不足、設質比率等）。這些內容屬於**酬金披露與合規規範**，並未包含 112 年至 113 年總經理酬金占比變動的數值或原因分析。\n\n建議您提供更具體的關鍵詞（如「酬金占比下降原因」）或指向包含該分析的頁碼，以便進一步查找相關資訊。",
+        "evaluation": {
+          "response_length": 187,
+          "has_error": false,
+          "has_numbers": true,
+          "has_percentage": false,
+          "has_chinese_numbers": true,
+          "difficulty": "中",
+          "keyword_relevance": 1.0,
+          "total_keywords": 4,
+          "matched_keywords": 4,
+          "quality_score": 9.5
+        },
+        "timestamp": "2025-08-21T11:41:06.682056"
+      },
+      {
+        "question_id": 14,
+        "difficulty": "中",
+        "question": "（副）總經理酬金占稅後純益之比例在 112 年與 113 年分別為何？",
+        "response": "目前提供的節錄中並未包含「副總經理酬金占稅後純益之比例」的具體數值。  \n- 節錄中僅列出「關鍵數據總結（112‑113 年）」的表格框架，並未顯示各年度的比例數字。  \n- 「公司治理報告」部分亦僅說明酬金單位與註記，未提供比例資訊。\n\n建議您提供包含該比例數字的具體頁碼或關鍵詞（例如「酬金佔純益比例」或「副總經理酬金」等），以便進一步查詢。",
+        "evaluation": {
+          "response_length": 173,
+          "has_error": false,
+          "has_numbers": true,
+          "has_percentage": false,
+          "has_chinese_numbers": true,
+          "difficulty": "中",
+          "keyword_relevance": 1.0,
+          "total_keywords": 5,
+          "matched_keywords": 5,
+          "quality_score": 9.5
+        },
+        "timestamp": "2025-08-21T11:41:40.764102"
+      },
+      {
+        "question_id": 17,
+        "difficulty": "中",
+        "question": "113 年度分配予總經理之員工酬勞（股票／現金／合計）各為多少？其占比為多少？",
+        "response": "目前提供的節錄內容主要說明了經理人薪酬結構、公司治理報告的格式以及披露規則，並未包含「113 年度分配予總經理之員工酬勞（股票／現金／合計）各為多少」或其占比的具體數值。  \n建議您提供包含該數據的具體頁碼或關鍵詞（例如「總經理酬金表」、「員工酬勞明細」等），以便進一步查詢。",
+        "evaluation": {
+          "response_length": 138,
+          "has_error": false,
+          "has_numbers": true,
+          "has_percentage": false,
+          "has_chinese_numbers": true,
+          "difficulty": "中",
+          "keyword_relevance": 1.0,
+          "total_keywords": 4,
+          "matched_keywords": 4,
+          "quality_score": 9.5
+        },
+        "timestamp": "2025-08-21T11:42:37.100756"
+      }
+    ],
+    "bottom_performers": [
+      {
+        "question_id": 7,
+        "difficulty": "易",
+        "question": "請列出董事會出席情形表中的所有獨立董事姓名。",
+        "response": "目前提供的節錄中，只列出了「職稱」欄位的內容（如董事長、獨立董事等），並未包含任何董事姓名。  \n因此無法直接列出「董事會出席情形表」中的所有獨立董事姓名。  \n\n請您提供包含董事姓名的頁碼或更具體的關鍵詞（例如「獨立董事姓名」或「董事會出席情形表」所在頁面），以便我為您查找並列出相關姓名。",
+        "evaluation": {
+          "response_length": 146,
+          "has_error": true,
+          "has_numbers": false,
+          "has_percentage": false,
+          "has_chinese_numbers": false,
+          "difficulty": "易",
+          "keyword_relevance": 1.0,
+          "total_keywords": 2,
+          "matched_keywords": 2,
+          "quality_score": 5.0
+        },
+        "timestamp": "2025-08-21T11:39:38.302525"
+      },
+      {
+        "question_id": 9,
+        "difficulty": "中",
+        "question": "113 年度評鑑平均總分為何？（a）整體董事會；（b）個別董事成員。",
+        "response": "抱歉，您提供的節錄內容僅包含文件標題、表格欄位名稱以及簡短說明，並未包含「113 年度評鑑平均總分」的實際數值。  \n該節錄屬於公司治理報告的結構性資訊（如章節標題、表格欄位），並未提供評鑑分數。  \n\n若您想查詢「113 年度評鑑平均總分」的具體數字，請提供包含該數據的具體頁碼或關鍵字（例如「評鑑平均總分」或「董事會評鑑」等），以便我們能夠精確定位並回覆。",
+        "evaluation": {
+          "response_length": 180,
+          "has_error": true,
+          "has_numbers": true,
+          "has_percentage": false,
+          "has_chinese_numbers": false,
+          "difficulty": "中",
+          "keyword_relevance": 1.0,
+          "total_keywords": 2,
+          "matched_keywords": 2,
+          "quality_score": 6.0
+        },
+        "timestamp": "2025-08-21T11:40:07.503339"
+      },
+      {
+        "question_id": 20,
+        "difficulty": "難",
+        "question": "根據提供的數據，驗證總經理 3,640 仟元約等於 113 年個體稅後純益的 0.35%。請寫出計算式（分數）並給出結果。",
+        "response": "所提供的節錄主要包含「職稱、姓名、股票金額、現金金額」以及「總經理及副總經理之酬金」等資訊，並未列出 113 年個體稅後純益的金額。  \n因此無法根據這些資料計算「3,640 仟元 ≈ 0.35% 的個體稅後純益」的驗證式。  \n\n建議您提供包含 113 年個體稅後純益數值的頁碼或關鍵字，以便進行正確的計算。",
+        "evaluation": {
+          "response_length": 155,
+          "has_error": true,
+          "has_numbers": true,
+          "has_percentage": true,
+          "has_chinese_numbers": false,
+          "difficulty": "難",
+          "keyword_relevance": 1.0,
+          "total_keywords": 4,
+          "matched_keywords": 4,
+          "quality_score": 6.0
+        },
+        "timestamp": "2025-08-21T11:44:00.317155"
+      },
+      {
+        "question_id": 19,
+        "difficulty": "難",
+        "question": "因設置審計委員會而不適用證券交易法第 14 條之 3 之規定時，實際適用的是哪一條？",
+        "response": "設置審計委員會時，證券交易法第 14 條之 3 不適用，實際適用的是「證券交易法第 14 條之 5」【20250821_112313_113_20240531-16-18 第2頁】。",
+        "evaluation": {
+          "response_length": 91,
+          "has_error": false,
+          "has_numbers": true,
+          "has_percentage": false,
+          "has_chinese_numbers": false,
+          "difficulty": "難",
+          "keyword_relevance": 0.6666666666666666,
+          "total_keywords": 3,
+          "matched_keywords": 2,
+          "quality_score": 8.0
+        },
+        "timestamp": "2025-08-21T11:43:39.670589"
+      },
+      {
+        "question_id": 8,
+        "difficulty": "中",
+        "question": "113 年董事會／各委員會績效評估結果是於哪一日期報告至各會議？",
+        "response": "113 年董事會及各委員會績效評估結果已於 **113 年 11 月 8 日** 提報至各委員會及董事會。  \n[20250821_112313_113_20240531-16-18 第3頁]",
+        "evaluation": {
+          "response_length": 96,
+          "has_error": false,
+          "has_numbers": true,
+          "has_percentage": false,
+          "has_chinese_numbers": false,
+          "difficulty": "中",
+          "keyword_relevance": 0.75,
+          "total_keywords": 4,
+          "matched_keywords": 3,
+          "quality_score": 8.25
+        },
+        "timestamp": "2025-08-21T11:39:52.286498"
+      }
+    ]
+  }
+}

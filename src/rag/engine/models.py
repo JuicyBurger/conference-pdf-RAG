@@ -22,7 +22,7 @@ class RetrievalRequest:
     """Standardized request for RAG engine retrieval."""
     query: str
     room_id: Optional[str] = None
-    top_k: int = 5
+    top_k: int = 10
     score_threshold: float = 0.3
     max_hops: Optional[int] = None
     expansion_top_k: Optional[int] = None

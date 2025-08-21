@@ -38,6 +38,12 @@ def ensure_graph_indexes() -> None:
         session.run("CREATE CONSTRAINT IF NOT EXISTS FOR (c:Chunk) REQUIRE c.id IS UNIQUE")
         session.run("CREATE CONSTRAINT IF NOT EXISTS FOR (c:Corpus) REQUIRE c.id IS UNIQUE")
         session.run("CREATE CONSTRAINT IF NOT EXISTS FOR (e:Entity) REQUIRE e.id IS UNIQUE")
+        
+        # Table-related constraints
+        session.run("CREATE CONSTRAINT IF NOT EXISTS FOR (o:Observation) REQUIRE o.source_hash IS UNIQUE")
+        session.run("CREATE CONSTRAINT IF NOT EXISTS FOR (m:Metric) REQUIRE m.name IS UNIQUE")
+        session.run("CREATE CONSTRAINT IF NOT EXISTS FOR (t:Table) REQUIRE (t.doc_id, t.table_id) IS UNIQUE")
+        
         # Helpful property indexes for filtering and captions
         session.run("CREATE INDEX IF NOT EXISTS FOR (d:Document) ON (d.name)")
         session.run("CREATE INDEX IF NOT EXISTS FOR (cp:Corpus) ON (cp.name)")
@@ -45,10 +51,18 @@ def ensure_graph_indexes() -> None:
         session.run("CREATE INDEX IF NOT EXISTS FOR (ch:Chunk) ON (ch.corpus_id)")
         session.run("CREATE INDEX IF NOT EXISTS FOR (ch:Chunk) ON (ch.page)")
         session.run("CREATE INDEX IF NOT EXISTS FOR (ch:Chunk) ON (ch.name)")
+        
         # Entity indexes
         session.run("CREATE INDEX IF NOT EXISTS FOR (e:Entity) ON (e.name)")
         session.run("CREATE INDEX IF NOT EXISTS FOR (e:Entity) ON (e.corpus_id)")
         session.run("CREATE INDEX IF NOT EXISTS FOR (e:Entity) ON (e.doc_id)")
+        
+        # Table-related indexes
+        session.run("CREATE INDEX IF NOT EXISTS FOR (d:DimType) ON (d.name)")
+        session.run("CREATE INDEX IF NOT EXISTS FOR (v:DimVal) ON (v.value)")
+        session.run("CREATE INDEX IF NOT EXISTS FOR (o:Observation) ON (o.doc_id)")
+        session.run("CREATE INDEX IF NOT EXISTS FOR (o:Observation) ON (o.table_id)")
+        session.run("CREATE INDEX IF NOT EXISTS FOR (t:Table) ON (t.doc_id)")
 
 
 def close_driver():

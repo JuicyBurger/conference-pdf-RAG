@@ -169,41 +169,56 @@ def index_nodes(nodes: List[dict], collection_name: str = QDRANT_COLLECTION, doc
                     "text": chunk_content,
                 })
         
-        # For table nodes, use as-is (no chunking needed)
-        elif node["type"] in ["table_summary", "table_record", "table_column"]:
-            all_texts.append(node_text)
-            metadata = {
-                "type": node["type"],
-                "page": node["page"],
-                "table_id": node.get("table_id"),
-                "text": node_text,
-            }
-            
-            # Add type-specific metadata
-            if node["type"] == "table_record":
-                metadata["row_idx"] = node.get("row_idx")
-            elif node["type"] == "table_column":
-                metadata["column_idx"] = node.get("column_idx")
-                metadata["column_name"] = node.get("column_name")
-            
-            # Include structured data if available
-            if "structured_data" in node:
-                metadata["structured_data"] = node["structured_data"]
-            
-            text_metadata.append(metadata)
+        # Skip table nodes - they are now handled by the KG pipeline
+        elif node["type"] in ["table_summary", "table_record", "table_column", "table_note"]:
+            print(f"⏭️ Skipping {node['type']} node - handled by KG pipeline")
+            continue
     
     # Batch embed all texts at once (balanced for speed/memory)
     print(f"🧠 Generating embeddings for {len(all_texts)} texts...")
+    
+    # Filter out empty texts before embedding
+    valid_texts = []
+    valid_indices = []
+    for i, text in enumerate(all_texts):
+        if text and text.strip():
+            valid_texts.append(text)
+            valid_indices.append(i)
+        else:
+            print(f"⚠️ Skipping empty text at index {i}")
+    
+    if not valid_texts:
+        print("❌ No valid texts to embed!")
+        return 0
+    
+    print(f"🧠 Generating embeddings for {len(valid_texts)} valid texts...")
     vectors = []
     batch_size = 100
-    for i in range(0, len(all_texts), batch_size):
-        batch_texts = all_texts[i:i + batch_size]
+    for i in range(0, len(valid_texts), batch_size):
+        batch_texts = valid_texts[i:i + batch_size]
         batch_vectors = embed(batch_texts)
         vectors.extend(batch_vectors)
-        print(f"   Processed {min(i + batch_size, len(all_texts))}/{len(all_texts)} texts...")
+        print(f"   Processed {min(i + batch_size, len(valid_texts))}/{len(valid_texts)} texts...")
+    
+    # Get expected dimension once (cached by the model)
+    expected_dimension = model.get_sentence_embedding_dimension()
+    
+    # Validate vectors
+    for i, vector in enumerate(vectors):
+        if not vector or len(vector) == 0:
+            print(f"❌ Empty vector generated for text {i}: {valid_texts[i][:50]}...")
+            # Replace with zero vector
+            vectors[i] = [0.0] * expected_dimension
+        elif len(vector) != expected_dimension:
+            print(f"❌ Wrong vector dimension {len(vector)} for text {i}, expected {expected_dimension}")
+            # Pad or truncate to correct dimension
+            if len(vector) < expected_dimension:
+                vectors[i] = vector + [0.0] * (expected_dimension - len(vector))
+            else:
+                vectors[i] = vector[:expected_dimension]
     
     # Create points with batch-generated vectors
-    for i, (text, metadata) in enumerate(zip(all_texts, text_metadata)):
+    for i, (text, metadata) in enumerate(zip(valid_texts, [text_metadata[idx] for idx in valid_indices])):
         payload = {
             "doc_id": doc_id,
             "page": metadata["page"],
@@ -222,13 +237,15 @@ def index_nodes(nodes: List[dict], collection_name: str = QDRANT_COLLECTION, doc
         # Add type-specific fields
         if metadata["type"] == "paragraph":
             payload["chunk_idx"] = metadata["chunk_idx"]
-        elif metadata["type"] in ["table_summary", "table_record", "table_column"]:
+        elif metadata["type"] in ["table_summary", "table_record", "table_column", "table_note"]:
             payload["table_id"] = metadata.get("table_id")
             if metadata["type"] == "table_record":
                 payload["row_idx"] = metadata.get("row_idx")
             elif metadata["type"] == "table_column":
                 payload["column_idx"] = metadata.get("column_idx")
                 payload["column_name"] = metadata.get("column_name")
+            elif metadata["type"] == "table_note":
+                payload["note_idx"] = metadata.get("note_idx")
             # Store structured data if available
             if "structured_data" in metadata:
                 payload["structured_data"] = metadata["structured_data"]

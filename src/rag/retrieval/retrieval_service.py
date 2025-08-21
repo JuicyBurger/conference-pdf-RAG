@@ -203,6 +203,16 @@ class RetrievalService:
         This function maintains the same interface as the original retrieve function
         but uses the new standardized retrieval service under the hood.
         """
+        # Increase top_k for table queries
+        default_top_k = kwargs.get('top_k', 8)
+        
+        # Check if this is a table query by looking for table-related keywords
+        is_table_query = any(keyword in query.lower() for keyword in ['table', '表格', 'show me', 'complete', 'display', 'find', 'contents'])
+        if is_table_query:
+            # Increase limit for table queries
+            adjusted_top_k = min(default_top_k * 3, 30)  # Up to 30 for table queries
+            kwargs['top_k'] = adjusted_top_k
+        
         # Create a retrieval request from the parameters
         request = RetrievalRequest(
             query=query,
@@ -395,7 +405,12 @@ class RetrievalService:
         Returns:
             List of Qdrant hits
         """
-        initial_limit = min(max(top_k * 3, 10), 50)  # Slightly higher floor for more chances
+        # Increase limit for table queries to get more comprehensive results
+        is_table_query = any(ct in ['table_row', 'table_summary'] for ct in constraints.get('content_types', []))
+        if is_table_query:
+            initial_limit = min(max(top_k * 5, 20), 100)  # Higher limit for table queries
+        else:
+            initial_limit = min(max(top_k * 3, 10), 50)  # Standard limit for other queries
         
         # Check if we have doc_id constraints
         doc_id_constraints_applied = bool(constraints.get('doc_ids'))
@@ -583,13 +598,34 @@ class RetrievalService:
         # Sort by score desc and keep top_k unique (dedup by doc_id+page)
         seen_sources = set()
         final = []
+        
+        # For table queries, use table-aware deduplication
+        is_table_query = any(ct in ['table_row', 'table_summary'] for ct in prefer_content_types or [])
+        
         for hit in sorted(all_hits.values(), key=lambda x: x.score, reverse=True):
             doc_id = hit.payload.get("doc_id", "unknown")
             page = hit.payload.get("page", "unknown")
-            key = f"{doc_id}:{page}"
-            if key in seen_sources:
-                continue
-            seen_sources.add(key)
+            
+            # Table-aware deduplication
+            if is_table_query:
+                # For tables, include table_id in deduplication key to preserve multiple tables
+                table_id = hit.payload.get("table_id", "unknown")
+                key = f"{doc_id}:{page}:{table_id}"
+                
+                # Also check if this is a different table embedding type (row vs summary)
+                level = hit.payload.get("level", "")
+                type_key = f"{key}:{level}"
+                
+                if type_key in seen_sources:
+                    continue
+                seen_sources.add(type_key)
+            else:
+                # Standard deduplication for non-table queries
+                key = f"{doc_id}:{page}"
+                if key in seen_sources:
+                    continue
+                seen_sources.add(key)
+            
             final.append(hit)
             if len(final) >= top_k:
                 break
@@ -606,8 +642,19 @@ class RetrievalService:
         # Soft prefer content types by promoting matching hits to the front
         if prefer_content_types:
             def type_rank(hit):
-                t = hit.payload.get('type')
-                return 0 if t in prefer_content_types else 1
+                # Check both 'type' and 'level' fields for content type matching
+                content_type = hit.payload.get('type', '')
+                level = hit.payload.get('level', '')
+                
+                # Map table levels to content types for filtering
+                if level == 'row' and 'table_row' in prefer_content_types:
+                    return 0
+                elif level == 'table' and 'table_summary' in prefer_content_types:
+                    return 0
+                elif content_type in prefer_content_types:
+                    return 0
+                else:
+                    return 1
             final = sorted(final, key=type_rank)
         
         logger.info(f"🔍 dense={len(dense_hits)} keyword={len(keyword_hits)} → {len(final)} unique hits; top_score={top_score:.3f}")

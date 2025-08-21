@@ -133,79 +133,63 @@ class QueryParser:
         return numbers
     
     def _extract_doc_ids(self, text: str) -> List[str]:
-        """Extract document IDs with fuzzy matching support."""
+        """Extract document IDs from text using fuzzy matching."""
         doc_ids = []
         
-        # Direct pattern matching for document ID formats
-        # 1) Full PDF filename with Chinese/ASCII, allowing spaces, hyphens, parentheses, and Chinese parentheses
-        patterns = [
-            r'([\u4e00-\u9fffA-Za-z0-9_\s\-\(\)（）]+\.pdf)(?=[,\s]|$)',
-            # 2) Same as above but without requiring .pdf (some users omit extension)
-            r'([\u4e00-\u9fffA-Za-z0-9_\s\-\(\)（）]+)(?=\s*文件|\s*檔案|\s*$)',
-            # 3) Common quarterly formats
-            r'([A-Za-z0-9]+Q[1-4][A-Za-z0-9]*)',
-            r'(\d{4}年[Q第]?[一二三四1-4][季度]?[A-Za-z0-9（）\-\s]*)',
-            # 4) Mixed alphanumeric codes
-            r'([A-Za-z]{2,}[0-9]{2,}[A-Za-z0-9]*)',
-        ]
-
-        # Additional pattern for better PDF filename extraction (include parentheses variants)
-        pdf_pattern = r'([\u4e00-\u9fffA-Za-z0-9_\s\-\(\)（）]+\.pdf)'
-        pdf_matches = re.findall(pdf_pattern, text)
-        for match in pdf_matches:
-            # Clean up the match to remove trailing text
-            clean_match = match.strip()
-            if clean_match and clean_match not in doc_ids:
-                doc_ids.append(clean_match)
+        # First, try exact matches
+        for doc_id in self.known_doc_ids:
+            if doc_id.lower() in text.lower():
+                doc_ids.append(doc_id)
         
-        for pattern in patterns:
-            matches = re.findall(pattern, text, re.IGNORECASE)
-            doc_ids.extend(matches)
+        # If no exact matches, try fuzzy matching
+        if not doc_ids and self.known_doc_ids:
+            # Use jieba to segment the text and look for potential doc_ids
+            words = jieba.lcut(text)
+            
+            for word in words:
+                # Skip very short words or common words that shouldn't be doc_ids
+                if len(word) < 5 or word.lower() in ['show', 'me', 'complete', 'tables', 'from', 'page', 'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by']:
+                    continue
+                
+                # Try fuzzy matching
+                best_match = process.extractOne(word, self.known_doc_ids, scorer=fuzz.ratio)
+                if best_match and best_match[1] > 80:  # 80% similarity threshold
+                    doc_ids.append(best_match[0])
         
-        # Use jieba to segment and look for potential document IDs
-        words = jieba.lcut(text)
-        for word in words:
-            # Check if word looks like a document ID
-            if len(word) > 3 and re.search(r'[A-Za-z0-9\u4e00-\u9fff]', word):
-                # Look for PDF files with Chinese characters
-                if word.endswith('.pdf') or any(char in word for char in ['Q', '財報', '報表', '年報', '季報', '手冊', '議事']):
-                    doc_ids.append(word)
-                    # Auto-add PDF filenames to jieba for future queries
-                    if word.endswith('.pdf') and word not in self.known_doc_ids:
-                        jieba.add_word(word)
-                        self.known_doc_ids.append(word)
-                        logger.debug(f"Auto-added PDF filename to jieba: '{word}'")
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_doc_ids = []
+        for doc_id in doc_ids:
+            if doc_id not in seen:
+                seen.add(doc_id)
+                unique_doc_ids.append(doc_id)
         
-        # Fuzzy matching against known document IDs
-        if self.known_doc_ids:
-            for potential_id in doc_ids[:]:  # Copy to avoid modification during iteration
-                best_match, score, _ = process.extractOne(
-                    potential_id, 
-                    self.known_doc_ids,
-                    scorer=fuzz.ratio
-                )
-                if score > 75:  # 75% similarity threshold
-                    if best_match not in doc_ids:
-                        doc_ids.append(best_match)
-                        logger.debug(f"Fuzzy matched '{potential_id}' -> '{best_match}' (score: {score})")
-        
-        return list(set(doc_ids))  # Remove duplicates
+        return unique_doc_ids
     
     def _extract_content_types(self, text: str) -> List[str]:
-        """Extract content type constraints."""
+        """Extract content types from text."""
         content_types = []
         
-        # Table indicators
+        # Table indicators - expanded patterns
         table_patterns = [
             r'表[格]?[一二三四五六七八九十\d]*',
             r'table[s]?\s*[\d]*',
             r'圖表',
             r'列表',
+            r'complete\s+table[s]?',  # "complete tables"
+            r'show\s+me\s+table[s]?',  # "show me tables"
+            r'get\s+table[s]?',        # "get tables"
+            r'find\s+table[s]?',       # "find tables"
+            r'display\s+table[s]?',    # "display tables"
+            r'列出\s*表[格]?',          # "列出表格"
+            r'顯示\s*表[格]?',          # "顯示表格"
+            r'查詢\s*表[格]?',          # "查詢表格"
         ]
         
         for pattern in table_patterns:
             if re.search(pattern, text, re.IGNORECASE):
-                content_types.append('table_record')
+                # For table queries, include both table_row and table_summary
+                content_types.extend(['table_row', 'table_summary'])
                 break
         
         # Paragraph indicators

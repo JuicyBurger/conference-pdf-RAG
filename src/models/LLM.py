@@ -79,6 +79,7 @@ def LLM(
     model: str,
     system_prompt: str,
     user_prompt: str,
+    img: str = None,
     options: dict = None,
     timeout: float = None,
     raw: bool = False
@@ -95,6 +96,9 @@ def LLM(
         {"role": "system", "content": system_prompt},
         {"role": "user",   "content": user_prompt}
     ]
+
+    if img:
+        messages[1]['images'] = [img]
 
     client_type = getattr(client, "client_type", "ollama")
     print(f">>> LLM call starting (model={model}, client={client_type})")

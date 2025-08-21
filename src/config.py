@@ -21,6 +21,9 @@ GRAPH_EXTRACT_MODEL = os.getenv("GRAPH_EXTRACT_MODEL", os.getenv("DEFAULT_GRAPH_
 # Embedding model settings
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "dengcao/Qwen3-Embedding-4B:Q8_0")  # Default embedding model for Ollama
 
+# OCR model settings
+OCR_MODEL = os.getenv("OCR_MODEL", "benhaotang/Nanonets-OCR-s:latest")  # Default OCR model for table extraction
+
 if LLM_PROVIDER == "production":
     # For vLLM, use the exact model name that vLLM serves (with forward slash and capital B)
     DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "meta-llama/Llama-3.1-8B-Instruct")  # Default for vLLM Production

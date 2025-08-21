@@ -38,19 +38,45 @@ class OllamaEmbeddingModel:
         except Exception as e:
             logger.error(f"❌ Failed to connect to Ollama server: {e}")
             raise
+        
+        # Cache the embedding dimension during initialization
+        self._cached_dimension = None
+        try:
+            self._cached_dimension = self._get_dimension_fallback()
+            logger.info(f"🔍 Cached embedding dimension: {self._cached_dimension}")
+        except Exception as e:
+            logger.warning(f"⚠️ Could not cache embedding dimension: {e}")
     
     def get_sentence_embedding_dimension(self) -> int:
-        """Get the embedding dimension for this model by testing with a sample text."""
+        """Get the embedding dimension for this model."""
+        # Use cached dimension if available
+        if self._cached_dimension is not None:
+            return self._cached_dimension
+        
+        # Fallback: try to get dimension dynamically (this should rarely happen)
         try:
             # Test with a simple text to get the actual dimension
             test_embedding = self.encode("test")
             dimension = len(test_embedding)
             logger.info(f"🔍 Dynamically detected embedding dimension: {dimension}")
+            # Cache it for future use
+            self._cached_dimension = dimension
             return dimension
         except Exception as e:
             logger.warning(f"⚠️ Could not detect embedding dimension dynamically: {e}")
             # Fallback to known dimension for Qwen3-Embedding-4B
-            return 2560
+            fallback_dimension = 2560
+            self._cached_dimension = fallback_dimension
+            return fallback_dimension
+    
+    def _get_dimension_fallback(self) -> int:
+        """Get embedding dimension without calling encode (to avoid circular dependency)."""
+        # Use cached dimension if available
+        if self._cached_dimension is not None:
+            return self._cached_dimension
+        
+        # Known dimension for Qwen3-Embedding-4B
+        return 2560
     
     def encode(self, texts: Union[str, List[str]], **kwargs) -> Union[List[float], List[List[float]]]:
         """
@@ -69,6 +95,12 @@ class OllamaEmbeddingModel:
         embeddings = []
         
         for text in texts:
+            # Handle empty or whitespace-only texts
+            if not text or not text.strip():
+                logger.warning(f"⚠️ Empty text detected, using zero vector")
+                embeddings.append([0.0] * self._get_dimension_fallback())
+                continue
+                
             try:
                 payload = {
                     "model": self.model_name,
@@ -88,12 +120,12 @@ class OllamaEmbeddingModel:
                 else:
                     logger.error(f"❌ Ollama embedding failed with status {response.status_code}: {response.text}")
                     # Return zero vector as fallback
-                    embeddings.append([0.0] * self.get_sentence_embedding_dimension())
+                    embeddings.append([0.0] * self._get_dimension_fallback())
                     
             except Exception as e:
                 logger.error(f"❌ Error generating embedding: {e}")
                 # Return zero vector as fallback
-                embeddings.append([0.0] * self.get_sentence_embedding_dimension())
+                embeddings.append([0.0] * self._get_dimension_fallback())
         
         # Return single embedding for single text, list for multiple texts
         if len(texts) == 1:

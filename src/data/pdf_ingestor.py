@@ -7,6 +7,11 @@ from typing import List, Dict, Any, Tuple, Optional
 from rapidfuzz import fuzz, process
 from .node_builder import paragraphs_to_nodes, table_to_nodes, clean_text_for_comparison
 
+# Import table processing components
+from .table_to_image_camelot import extract_tables_to_images
+from .table_extractor import extract_tables_from_image
+from .table_summarizer import summarize_table
+
 # Import camelot with error handling
 try:
     import camelot
@@ -393,6 +398,7 @@ def deduplicate_content(paragraph_text: str, table_rows: List[str], threshold: f
 def build_page_nodes(pdf_path: str) -> List[Dict[str, Any]]:
     """
     Build enhanced nodes from PDF pages including both paragraphs and tables.
+    Now includes advanced table processing: table-to-image conversion and JSON extraction.
     
     Args:
         pdf_path: Path to PDF file
@@ -400,6 +406,130 @@ def build_page_nodes(pdf_path: str) -> List[Dict[str, Any]]:
     Returns:
         List of nodes ready for indexing
     """
+    all_nodes = []
+    total_pages = 0
+    
+    # Step 1: Extract tables to images and get metadata
+    print("🔄 Step 1: Extracting tables to images...")
+    table_images = extract_tables_to_images(pdf_path, output_dir="data/temp_tables")
+    
+    if table_images:
+        print(f"📊 Found {len(table_images)} tables to process")
+        
+        # Group tables by page for processing
+        tables_by_page = {}
+        for table_info in table_images:
+            page_num = table_info['page']
+            if page_num not in tables_by_page:
+                tables_by_page[page_num] = []
+            tables_by_page[page_num].append(table_info)
+        
+        total_pages = max(tables_by_page.keys()) if tables_by_page else 0
+    else:
+        print("📊 No tables found, proceeding with text-only extraction")
+        # Fallback to original method if no tables found
+        return _build_page_nodes_fallback(pdf_path)
+    
+    # Step 2: Extract text pages (excluding table regions)
+    print("🔄 Step 2: Extracting text content...")
+    # Create skip regions from table bounding boxes
+    skip_regions_pdf_by_page: Dict[int, List[Tuple[float, float, float, float]]] = {}
+    for table_info in table_images:
+        page_num = table_info['page']
+        # The coordinates from table_to_image_camelot are already in PyMuPDF space
+        # We need to convert them to PDF space for extract_text_pages
+        x0, y0, x1, y1 = table_info['x0'], table_info['y0'], table_info['x1'], table_info['y1']
+        
+        # Convert PyMuPDF coordinates (top-left origin) to PDF coordinates (bottom-left origin)
+        # We need to get the page height to do this conversion
+        try:
+            with fitz.open(pdf_path) as doc:
+                if page_num <= len(doc):
+                    page = doc[page_num - 1]  # 0-based indexing
+                    page_height = page.rect.height
+                    # Convert y coordinates: PyMuPDF y0 (top) -> PDF y1 (top)
+                    # PyMuPDF y1 (bottom) -> PDF y0 (bottom)
+                    pdf_y0 = page_height - y1  # Convert bottom to bottom
+                    pdf_y1 = page_height - y0  # Convert top to top
+                    skip_regions_pdf_by_page.setdefault(page_num, []).append((x0, pdf_y0, x1, pdf_y1))
+        except Exception as e:
+            print(f"⚠️  Could not convert coordinates for page {page_num}: {e}")
+            # Fallback: use coordinates as-is
+            skip_regions_pdf_by_page.setdefault(page_num, []).append((x0, y0, x1, y1))
+    
+    pages = extract_text_pages(pdf_path, skip_regions_pdf_by_page=skip_regions_pdf_by_page)
+    total_pages = max(total_pages, len(pages))
+    
+    print(f"🏗️  Building nodes from {total_pages} pages...")
+    
+    # Step 3: Process each page
+    for page_num in range(1, total_pages + 1):
+        print(f"📄 Processing page {page_num}...")
+        
+        # Get text content for this page
+        page_text = ""
+        for page_data in pages:
+            if page_data["page"] == page_num:
+                page_text = page_data["text"]
+                break
+        
+        # Get tables for this page
+        page_tables = tables_by_page.get(page_num, [])
+        
+        # Process paragraph content
+        if page_text.strip():
+            paragraph_nodes = paragraphs_to_nodes(page_num, page_text)
+            all_nodes.extend(paragraph_nodes)
+            print(f"   📝 Added {len(paragraph_nodes)} paragraph nodes")
+        
+        # Process tables for this page
+        for table_info in page_tables:
+            try:
+                # Step 3a: Extract JSON from table image
+                print(f"   🖼️  Processing table {table_info['table_id']} from image...")
+                json_tables = extract_tables_from_image(table_info['image_path'])
+                
+                if json_tables:
+                    # Step 3b: Create table nodes from JSON content
+                    table_nodes = _create_table_nodes_from_json(
+                        page_num, 
+                        table_info['table_id'], 
+                        json_tables
+                    )
+                    all_nodes.extend(table_nodes)
+                    print(f"   📊 Added {len(table_nodes)} table nodes")
+                else:
+                    print(f"   ⚠️  No JSON content extracted from table {table_info['table_id']}")
+                    
+            except Exception as e:
+                print(f"   ❌ Error processing table {table_info['table_id']}: {e}")
+                continue
+        
+        # Clean up temporary table images
+        for table_info in page_tables:
+            try:
+                if os.path.exists(table_info['image_path']):
+                    os.remove(table_info['image_path'])
+            except Exception as e:
+                print(f"   ⚠️  Could not clean up {table_info['image_path']}: {e}")
+    
+    # Clean up temporary directory
+    try:
+        temp_dir = "data/temp_tables"
+        if os.path.exists(temp_dir):
+            import shutil
+            shutil.rmtree(temp_dir)
+    except Exception as e:
+        print(f"⚠️  Could not clean up temp directory: {e}")
+    
+    print(f"✅ Built {len(all_nodes)} total nodes")
+    return all_nodes
+
+
+def _build_page_nodes_fallback(pdf_path: str) -> List[Dict[str, Any]]:
+    """Fallback to original table extraction method when no tables are found."""
+    print("🔄 Using fallback table extraction method...")
+    
     # Extract tables with metadata first and mask their regions from paragraph text
     tables_meta = extract_tables_with_meta(pdf_path)
     skip_regions_pdf_by_page: Dict[int, List[Tuple[float, float, float, float]]] = {}
@@ -417,7 +547,7 @@ def build_page_nodes(pdf_path: str) -> List[Dict[str, Any]]:
     
     all_nodes = []
     total_pages = len(pages)
-    print(f"🏗️  Building nodes from {total_pages} pages...")
+    print(f"🏗️  Building nodes from {total_pages} pages (fallback method)...")
     
     for page_data in pages:
         page_no = page_data["page"]
@@ -467,8 +597,128 @@ def build_page_nodes(pdf_path: str) -> List[Dict[str, Any]]:
         # Show page info
         print(f"📄 Page {page_no}: {len(paragraph_nodes)} paragraphs, {len(filtered_table_nodes)} table rows")
     
-    print(f"✅ Built {len(all_nodes)} total nodes")
+    print(f"✅ Built {len(all_nodes)} total nodes (fallback)")
     return all_nodes
+
+
+def _create_table_nodes_from_json(page_num: int, table_id: int, json_tables: List[Dict]) -> List[Dict[str, Any]]:
+    """
+    Create table nodes from extracted JSON content.
+    
+    Args:
+        page_num: Page number
+        table_id: Table identifier
+        json_tables: List of table data from JSON extraction
+        
+    Returns:
+        List of table nodes ready for indexing
+    """
+    table_nodes = []
+    
+    for table_idx, table_data in enumerate(json_tables):
+        headers = table_data.get('headers', [])
+        records = table_data.get('records', [])
+        notes = table_data.get('notes', [])
+        
+        # Create complete structured_data for KG extraction
+        complete_structured_data = {
+            "headers": headers,
+            "records": records,
+            "notes": notes,
+            "page": page_num,
+            "anchor": f"table_{table_id}_{table_idx}"
+        }
+        
+        # Create table summary node with intelligent summarization
+        if headers and records:
+            # Prepare table data for summarization
+            table_data_for_summary = {
+                "columns": headers,
+                "records": records,
+                "notes": notes
+            }
+            
+            try:
+                # Generate intelligent summary using LLM
+                print(f"   🤖 Generating intelligent summary for table {table_id}_{table_idx}...")
+                summary_text = summarize_table(table_data_for_summary)
+                print(f"   ✅ Summary generated: {len(summary_text)} characters")
+            except Exception as e:
+                print(f"   ⚠️  Summary generation failed, using fallback: {e}")
+                # Fallback to basic summary
+                summary_text = f"Table with {len(headers)} columns and {len(records)} rows. Headers: {', '.join(headers[:5])}{'...' if len(headers) > 5 else ''}"
+            
+            table_nodes.append({
+                "type": "table_summary",
+                "page": page_num,
+                "table_id": f"{table_id}_{table_idx}",
+                "text": summary_text,
+                "structured_data": complete_structured_data  # Use complete data for KG extraction
+            })
+        
+        # Create table record nodes
+        for record_idx, record in enumerate(records):
+            if record.get('__note__'):
+                # Skip note records for now (they're handled separately)
+                continue
+                
+            # Create a structured text representation
+            record_parts = []
+            for header, value in record.items():
+                if header != '__note__':
+                    record_parts.append(f"{header}: {value}")
+            
+            record_text = " | ".join(record_parts)
+            
+            table_nodes.append({
+                "type": "table_record",
+                "page": page_num,
+                "table_id": f"{table_id}_{table_idx}",
+                "row_idx": record_idx,
+                "text": record_text,
+                "structured_data": complete_structured_data  # Use complete data for KG extraction
+            })
+        
+        # Create table column nodes
+        for col_idx, header in enumerate(headers):
+            if not header:
+                continue
+                
+            # Collect all values for this column
+            column_values = []
+            for record in records:
+                if not record.get('__note__') and header in record:
+                    value = record[header]
+                    if value and str(value).strip():
+                        column_values.append(str(value))
+            
+            if column_values:
+                column_text = f"Column '{header}': {', '.join(column_values[:10])}{'...' if len(column_values) > 10 else ''}"
+                
+                table_nodes.append({
+                    "type": "table_column",
+                    "page": page_num,
+                    "table_id": f"{table_id}_{table_idx}",
+                    "column_idx": col_idx,
+                    "column_name": header,
+                    "text": column_text,
+                    "structured_data": complete_structured_data  # Use complete data for KG extraction
+                })
+        
+        # Create note nodes if any
+        for note_idx, note in enumerate(notes):
+            note_text = note.get('text', '')
+            if note_text:
+                table_nodes.append({
+                    "type": "table_note",
+                    "page": page_num,
+                    "table_id": f"{table_id}_{table_idx}",
+                    "note_idx": note_idx,
+                    "text": note_text,
+                    "structured_data": complete_structured_data  # Use complete data for KG extraction
+                })
+    
+    return table_nodes
 
 
 

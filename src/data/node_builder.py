@@ -5,7 +5,10 @@ Node builder helpers for converting paragraphs and tables to structured nodes
 import pandas as pd
 import json
 import re
+import logging
 from typing import List, Dict, Any
+
+logger = logging.getLogger(__name__)
 
 
 def paragraphs_to_nodes(page_no: int, paragraph_text: str) -> List[Dict[str, Any]]:
@@ -163,17 +166,32 @@ def table_to_nodes(page_no: int, table_df: pd.DataFrame, table_id: int) -> List[
     
     # 1. Table summary node (overview of the entire table)
     if table_json["records"]:
-        summary_text = f"表格包含 {len(table_json['columns'])} 個欄位: {', '.join(table_json['columns'])}。共有 {len(table_json['records'])} 筆記錄。"
-        if table_json["notes"]:
-            summary_text += f" 備註: {' '.join(table_json['notes'])}"
-        
-        nodes.append({
-            "page": page_no,
-            "type": "table_summary",
-            "table_id": table_id,
-            "text": summary_text,
-            "structured_data": table_json
-        })
+        # Use the new table summarizer for better summaries
+        try:
+            from .table_summarizer import summarize_table
+            summary_text = summarize_table(table_json)
+            
+            nodes.append({
+                "page": page_no,
+                "type": "table_summary",
+                "table_id": table_id,
+                "text": summary_text,
+                "structured_data": table_json
+            })
+        except Exception as e:
+            # Fallback to simple summary if summarizer fails
+            logger.warning(f"表格總結生成失敗，使用備用總結: {e}")
+            summary_text = f"表格包含 {len(table_json['columns'])} 個欄位: {', '.join(table_json['columns'])}。共有 {len(table_json['records'])} 筆記錄。"
+            if table_json["notes"]:
+                summary_text += f" 備註: {' '.join(table_json['notes'])}"
+            
+            nodes.append({
+                "page": page_no,
+                "type": "table_summary",
+                "table_id": table_id,
+                "text": summary_text,
+                "structured_data": table_json
+            })
     
     # 2. Individual record nodes (each row as a meaningful sentence)
     for row_idx, record in enumerate(table_json["records"]):

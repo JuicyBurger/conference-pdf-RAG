@@ -176,10 +176,51 @@ class GraphRAGEngine(BaseRAGEngine):
                             logger.info(f"🔍 Debug: Using alternative chunk IDs: {seed_ids}")
                         else:
                             logger.warning("🔍 Debug: No chunks found even with alternative lookup")
-                            return []
-                    else:
-                        logger.warning("🔍 Debug: No seed hit data available for alternative lookup")
-                        return []
+                            
+                            # Special handling for table embeddings
+                            # Check if any of the seed hits are table embeddings
+                            table_embeddings = []
+                            for hit in seed_hits:
+                                payload = hit.payload if hasattr(hit, 'payload') else {}
+                                if payload.get('level') in ['row', 'table'] or 'table' in payload.get('type', ''):
+                                    table_embeddings.append(hit)
+                            
+                            if table_embeddings:
+                                logger.info(f"🔍 Debug: Found {len(table_embeddings)} table embeddings, creating temporary chunks")
+                                # Create temporary chunk nodes for table embeddings
+                                temp_chunk_ids = []
+                                for hit in table_embeddings[:3]:  # Limit to 3
+                                    payload = hit.payload if hasattr(hit, 'payload') else {}
+                                    temp_chunk_id = f"temp_{payload.get('doc_id', '')}_{payload.get('table_id', '')}_{payload.get('level', '')}"
+                                    
+                                    # Create temporary chunk node
+                                    temp_cypher = """
+                                    MERGE (c:Chunk {id: $chunk_id})
+                                    ON CREATE SET 
+                                        c.text = $text,
+                                        c.doc_id = $doc_id,
+                                        c.page = $page,
+                                        c.table_id = $table_id,
+                                        c.type = $level,
+                                        c.temp = true
+                                    """
+                                    ses.run(temp_cypher, {
+                                        'chunk_id': temp_chunk_id,
+                                        'text': payload.get('text', '')[:200],
+                                        'doc_id': payload.get('doc_id', ''),
+                                        'page': payload.get('page', ''),
+                                        'table_id': payload.get('table_id', ''),
+                                        'level': payload.get('level', 'table')
+                                    })
+                                    temp_chunk_ids.append(temp_chunk_id)
+                                
+                                if temp_chunk_ids:
+                                    seed_ids = temp_chunk_ids
+                                    logger.info(f"🔍 Debug: Created temporary chunk IDs: {temp_chunk_ids}")
+                                else:
+                                    return []
+                            else:
+                                return []
                 
                 # Now check what relationships exist from these chunks
                 rel_check_cypher = """

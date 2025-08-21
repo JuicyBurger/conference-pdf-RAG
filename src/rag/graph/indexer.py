@@ -62,6 +62,8 @@ def build_graph_from_nodes(nodes: List[Dict[str, Any]], doc_id: str, batch_size:
 
     driver = get_driver()
     chunks: List[dict] = []
+    kg_count = 0
+    qdrant_table_embeddings = 0
     
     # Import chunking function to ensure consistency with Qdrant
     from src.data.chunker import chunk_text
@@ -124,7 +126,28 @@ def build_graph_from_nodes(nodes: List[Dict[str, Any]], doc_id: str, batch_size:
             session.run(cypher, {"chunks": chunks[i:i+batch_size], "doc_id": doc_id, "corpus_id": corpus_id})
 
     logger.info(f"[GraphIngest] Upserted {len(chunks)} chunks to Neo4j for doc_id={doc_id}")
-    return len(chunks)
+    
+    # NEW: Extract and queue table KG + Qdrant embeddings
+    processed_tables = set()  # Track processed tables to avoid duplicates
+    for node in nodes:
+        if node.get('type') in ['table_summary', 'table_record', 'table_column', 'table_note']:
+            table_id = node.get('table_id', 'unknown')
+            
+            # Only process each table once (use table_summary as the primary node)
+            if node.get('type') == 'table_summary' and table_id not in processed_tables:
+                structured_data = node.get('structured_data')
+                if structured_data:
+                    try:
+                        from .table_ingestion import extract_and_ingest_table_kg
+                        kg_result = extract_and_ingest_table_kg(structured_data, doc_id, table_id)
+                        kg_count += kg_result.get('observation_count', 0)
+                        qdrant_table_embeddings += kg_result.get('qdrant_total_embeddings', 0)
+                        logger.info(f"[GraphIngest] Ingested {kg_result.get('observation_count', 0)} table observations to Neo4j + {kg_result.get('qdrant_total_embeddings', 0)} embeddings to Qdrant for doc_id={doc_id}, table_id={table_id}")
+                        processed_tables.add(table_id)
+                    except Exception as e:
+                        logger.error(f"[GraphIngest] Error extracting table KG: {e}")
+    
+    return len(chunks) + kg_count
 
 
 def extract_entities_relations_and_index(
