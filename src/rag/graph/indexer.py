@@ -28,7 +28,7 @@ from llama_index.graph_stores.neo4j import Neo4jPropertyGraphStore
 from llama_index.core.indices.property_graph import PropertyGraphIndex
 from llama_index.core.indices.property_graph import DynamicLLMPathExtractor
 from llama_index.core import Settings
-from src.rag.indexing.indexer import index_text_payloads, index_nodes
+from src.indexing import VectorIndexer
 from src.models.embedder import configure_llamaindex_for_local_models
 from src.data.pdf_ingestor import build_page_nodes
 from .graph_store import get_driver
@@ -94,21 +94,38 @@ def build_graph_from_nodes(nodes: List[Dict[str, Any]], doc_id: str, batch_size:
                     "chunk_idx": chunk_idx,
                 })
         else:
-            # For non-paragraph nodes, use as-is (same as Qdrant)
+            # For non-paragraph nodes, chunk table-related texts as well to avoid super-nodes
             chunk_idx = n.get("chunk_idx", 0)
-            seed = f"{doc_id}|{page}|{ntype}|{chunk_idx}|{raw_text[:64]}".encode("utf-8", errors="ignore")
-            md5_hash = hashlib.md5(seed).hexdigest()
-            cid = md5_to_uuid(md5_hash)  # Convert to UUID format
-            chunks.append({
-                "id": cid,
-                "doc_id": doc_id,
-                "page": int(page) if isinstance(page, int) or (isinstance(page, str) and page.isdigit()) else None,
-                "type": ntype,
-                "name": f"{doc_id} p{page}",
-                "text": raw_text,
-                "corpus_id": corpus_id,
-                "chunk_idx": chunk_idx,
-            })
+            if ntype in ["table_summary", "table_note", "table_chunk"]:
+                text_chunks = chunk_text(raw_text, content_type="table")
+                for chunk_idx, chunk_content in enumerate(text_chunks):
+                    seed = f"{doc_id}|{page}|{ntype}|{chunk_idx}|{chunk_content[:64]}".encode("utf-8", errors="ignore")
+                    md5_hash = hashlib.md5(seed).hexdigest()
+                    cid = md5_to_uuid(md5_hash)  # Convert to UUID format
+                    chunks.append({
+                        "id": cid,
+                        "doc_id": doc_id,
+                        "page": int(page) if isinstance(page, int) or (isinstance(page, str) and page.isdigit()) else None,
+                        "type": ntype,
+                        "name": f"{doc_id} p{page}",
+                        "text": chunk_content,
+                        "corpus_id": corpus_id,
+                        "chunk_idx": chunk_idx,
+                    })
+            else:
+                seed = f"{doc_id}|{page}|{ntype}|{chunk_idx}|{raw_text[:64]}".encode("utf-8", errors="ignore")
+                md5_hash = hashlib.md5(seed).hexdigest()
+                cid = md5_to_uuid(md5_hash)  # Convert to UUID format
+                chunks.append({
+                    "id": cid,
+                    "doc_id": doc_id,
+                    "page": int(page) if isinstance(page, int) or (isinstance(page, str) and page.isdigit()) else None,
+                    "type": ntype,
+                    "name": f"{doc_id} p{page}",
+                    "text": raw_text,
+                    "corpus_id": corpus_id,
+                    "chunk_idx": chunk_idx,
+                })
 
     if not chunks:
         return 0
@@ -136,13 +153,14 @@ def build_graph_from_nodes(nodes: List[Dict[str, Any]], doc_id: str, batch_size:
             # Only process each table once (use table_summary as the primary node)
             if node.get('type') == 'table_summary' and table_id not in processed_tables:
                 structured_data = node.get('structured_data')
+                summary_text = (node.get('text') or "").strip()  # Get summary from table_summary node
                 if structured_data:
                     try:
                         from .table_ingestion import extract_and_ingest_table_kg
-                        kg_result = extract_and_ingest_table_kg(structured_data, doc_id, table_id)
-                        kg_count += kg_result.get('observation_count', 0)
-                        qdrant_table_embeddings += kg_result.get('qdrant_total_embeddings', 0)
-                        logger.info(f"[GraphIngest] Ingested {kg_result.get('observation_count', 0)} table observations to Neo4j + {kg_result.get('qdrant_total_embeddings', 0)} embeddings to Qdrant for doc_id={doc_id}, table_id={table_id}")
+                        kg_result = extract_and_ingest_table_kg(structured_data, doc_id, table_id, summary_text)
+                        kg_count += kg_result.get('observations', 0)
+                        qdrant_table_embeddings += kg_result.get('qdrant_embeddings', 0)
+                        logger.info(f"[GraphIngest] Ingested {kg_result.get('observations', 0)} table observations to Neo4j + {kg_result.get('qdrant_embeddings', 0)} embeddings to Qdrant for doc_id={doc_id}, table_id={table_id}")
                         processed_tables.add(table_id)
                     except Exception as e:
                         logger.error(f"[GraphIngest] Error extracting table KG: {e}")
@@ -310,7 +328,8 @@ def extract_entities_relations_and_index(
     # Prepare Qdrant indexing payloads for entity descriptions and community summaries
     payloads: List[Dict[str, Any]] = []
 
-    qdrant_vectors = index_text_payloads(payloads) if payloads else 0
+    # TODO: If needed in the future, implement entity/community vector indexing using VectorIndexer
+    qdrant_vectors = 0  # Currently no entity/community vectors indexed
     logger.info(f"[GraphExtractor] Indexed {qdrant_vectors} entity/community vectors to Qdrant")
 
     # Return counts from Neo4j for visibility
@@ -388,7 +407,11 @@ def ingest_pdfs_to_graph(pdf_paths: List[str], training_room_id: str | None = No
         try:
             logger.info("[TrainingIngest] Indexing chunk vectors to Qdrant (scope=graph)")
             extra_payload = {"corpus_id": corpus_id, "scope": "graph"}
-            vec_count = index_nodes(nodes, collection_name=QDRANT_COLLECTION, doc_id=doc_id, extra_payload=extra_payload)
+            
+            # Use new vector indexer
+            indexer = VectorIndexer(QDRANT_COLLECTION)
+            result = indexer.index_nodes(nodes, doc_id, extra_payload)
+            vec_count = result.indexed_count if result.success else 0
         except Exception as e:
             logger.error(f"[TrainingIngest] Qdrant index failed: {e}")
             results[pdf_path] = {"neo4j_chunks": chunk_count, "erc": erc, "error": f"qdrant_index_failed: {e}"}

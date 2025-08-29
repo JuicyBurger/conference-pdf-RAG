@@ -48,8 +48,27 @@ def upload_pdf():
         # Default behavior: GraphRAG training ingestion (corpus-scoped). No params required.
         # Backwards-compat: accept optional training_room_id/training_corpus_id but not required.
         training_room_id = request.form.get('training_room_id') or request.args.get('training_room_id')
+        # Optional per-request ingestion knobs
+        def _to_bool(v):
+            return str(v).strip() in ['1', 'true', 'True', 'yes'] if v is not None else None
+        skip_graph = _to_bool(request.form.get('skip_graph') or request.args.get('skip_graph'))
+        try:
+            index_batch_size = int(request.form.get('index_batch_size') or request.args.get('index_batch_size')) if (request.form.get('index_batch_size') or request.args.get('index_batch_size')) else None
+        except Exception:
+            index_batch_size = None
+        try:
+            graph_batch_size = int(request.form.get('graph_batch_size') or request.args.get('graph_batch_size')) if (request.form.get('graph_batch_size') or request.args.get('graph_batch_size')) else None
+        except Exception:
+            graph_batch_size = None
         # Kick off training ingestion in background via service wrapper
-        task_id = ingestion_service.start_training_ingestion(validated_files, training_room_id, progress_callback)
+        task_id = ingestion_service.start_training_ingestion(
+            validated_files,
+            training_room_id,
+            progress_callback,
+            skip_graph=skip_graph,
+            index_batch_size=index_batch_size,
+            graph_batch_size=graph_batch_size,
+        )
         
         # Get initial task status
         task_status = ingestion_service.get_ingestion_status(task_id)

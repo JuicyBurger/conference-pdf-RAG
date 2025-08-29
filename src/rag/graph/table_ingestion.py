@@ -11,8 +11,8 @@ from typing import List, Dict, Any, Optional
 import re
 
 from .graph_store import get_driver
-from src.config import NEO4J_DATABASE, QDRANT_COLLECTION
-from src.rag.indexing.indexer import index_text_payloads
+from src.config import NEO4J_DATABASE, QDRANT_COLLECTION, USE_TABLE_HTML_CHUNKS
+from src.indexing.vector_indexer import VectorIndexer
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +143,7 @@ def create_row_level_embedding(observations: List[dict], doc_id: str, table_id: 
     return embeddings
 
 
-def create_table_level_embedding(observations: List[dict], structured_data: dict, doc_id: str, table_id: str, page: Optional[int] = None, analysis: dict = None) -> Dict[str, Any]:
+def create_table_level_embedding(observations: List[dict], structured_data: dict, doc_id: str, table_id: str, page: Optional[int] = None, analysis: dict = None, summary_text: Optional[str] = None) -> Dict[str, Any]:
     """Create table-level embedding for Qdrant"""
     
     # Get table metadata
@@ -187,11 +187,19 @@ def create_table_level_embedding(observations: List[dict], structured_data: dict
         text += f" ; notes={notes_text}"
     text += f"\nexamples: {examples_str}"
     
+    # Add summary to text if available
+    if summary_text:
+        s = summary_text.strip()
+        if len(s) > 400:
+            s = s[:400] + "..."
+        text += f"\nsummary: {s}"
+    
     # Create embedding ID
     embedding_id = f"{doc_id}#tbl:{table_id}"
     
     # Add text hash for deduplication
     text_hash = hashlib.md5(text.encode("utf-8")).hexdigest()
+    summary_hash = hashlib.md5(summary_text.encode("utf-8")).hexdigest() if summary_text else None
     
     return {
         "text": text,
@@ -205,11 +213,13 @@ def create_table_level_embedding(observations: List[dict], structured_data: dict
         "header_terms": sorted(norm_label(h) for h in headers),
         "observation_count": len(observations),
         "scope": "table",  # Mark as table scope for retrieval
-        "text_hash": text_hash
+        "text_hash": text_hash,
+        "summary": summary_text or "",
+        "summary_hash": summary_hash or "",
     }
 
 
-def embed_table_to_qdrant(observations: List[dict], structured_data: dict, doc_id: str, table_id: str, page: Optional[int] = None, analysis: dict = None) -> dict:
+def embed_table_to_qdrant(observations: List[dict], structured_data: dict, doc_id: str, table_id: str, page: Optional[int] = None, analysis: dict = None, summary_text: Optional[str] = None) -> dict:
     """Embed table to Qdrant using hybrid strategy"""
     
     if not observations:
@@ -251,13 +261,28 @@ def embed_table_to_qdrant(observations: List[dict], structured_data: dict, doc_i
         row_embeddings = create_row_level_embedding(row_embeddings_to_create, doc_id, table_id, page, structured_data)
         
         # Create table-level embedding
-        table_embedding = create_table_level_embedding(observations, structured_data, doc_id, table_id, page, analysis)
+        table_embedding = create_table_level_embedding(observations, structured_data, doc_id, table_id, page, analysis, summary_text)
         
         # Prepare all embeddings for Qdrant
         all_embeddings = row_embeddings + [table_embedding]
         
-        # Index to Qdrant
-        qdrant_count = index_text_payloads(all_embeddings, collection_name=QDRANT_COLLECTION)
+        # Index to Qdrant using VectorIndexer
+        indexer = VectorIndexer(QDRANT_COLLECTION)
+        
+        # Convert embeddings to nodes format expected by VectorIndexer
+        nodes_for_indexing = []
+        for embedding in all_embeddings:
+            node = {
+                "text": embedding.get("text", ""),
+                "type": embedding.get("type", "table_embedding"),
+                "page": embedding.get("page", 1),
+                "metadata": embedding  # Include all embedding metadata
+            }
+            nodes_for_indexing.append(node)
+        
+        # Index nodes
+        result = indexer.index_nodes(nodes_for_indexing, doc_id, extra_payload={"table_id": table_id})
+        qdrant_count = result.indexed_count if result.success else 0
         
         logger.info(f"Embedded table {table_id} to Qdrant: {len(row_embeddings)} row embeddings + 1 table embedding = {qdrant_count} total")
         
@@ -272,7 +297,7 @@ def embed_table_to_qdrant(observations: List[dict], structured_data: dict, doc_i
         return {'row_embeddings': 0, 'table_embeddings': 0, 'error': str(e)}
 
 
-def process_neo4j_batch(observations: List[dict], doc_id: str, table_id: str) -> dict:
+def process_neo4j_batch(observations: List[dict], doc_id: str, table_id: str, summary_text: Optional[str] = None) -> dict:
     """Process a batch of observations for Neo4j ingestion synchronously"""
     
     if not observations:
@@ -286,6 +311,7 @@ def process_neo4j_batch(observations: List[dict], doc_id: str, table_id: str) ->
         UNWIND $observations AS obs
         MERGE (ds:Dataset {doc_id: $doc_id})
         MERGE (tb:Table {doc_id: $doc_id, table_id: $table_id})-[:IN_DATASET]->(ds)
+        SET tb.summary = coalesce($summary, tb.summary)
 
         WITH obs, tb
         WITH obs, tb, (CASE
@@ -335,7 +361,8 @@ def process_neo4j_batch(observations: List[dict], doc_id: str, table_id: str) ->
             result = session.run(cypher, {
                 'observations': observations,
                 'doc_id': doc_id,
-                'table_id': table_id
+                'table_id': table_id,
+                'summary': summary_text
             })
             
             # Get summary statistics
@@ -353,7 +380,7 @@ def process_neo4j_batch(observations: List[dict], doc_id: str, table_id: str) ->
         raise
 
 
-def create_chunk_nodes_for_tables(observations: List[dict], doc_id: str, table_id: str, page: Optional[int] = None) -> List[str]:
+def create_chunk_nodes_for_tables(observations: List[dict], doc_id: str, table_id: str, page: Optional[int] = None, summary_text: Optional[str] = None) -> List[str]:
     """Create Chunk nodes in Neo4j for table embeddings to enable graph retrieval.
     
     Args:
@@ -361,6 +388,7 @@ def create_chunk_nodes_for_tables(observations: List[dict], doc_id: str, table_i
         doc_id: Document ID
         table_id: Table ID
         page: Page number
+        summary_text: Optional table summary text
         
     Returns:
         List of chunk IDs created
@@ -371,13 +399,17 @@ def create_chunk_nodes_for_tables(observations: List[dict], doc_id: str, table_i
         with get_driver().session(database=NEO4J_DATABASE) as session:
             # Create table-level chunk
             table_chunk_id = f"{doc_id}#tbl:{table_id}"
-            table_text = f"Table {table_id} on page {page} with {len(observations)} observations"
+            
+            # Prefer summary as chunk text, fallback to generic
+            base = (summary_text or f"Table {table_id} on page {page} with {len(observations)} observations").strip()
+            table_text = (base[:600] + "...") if len(base) > 600 else base  # concise
             
             # Create or merge table chunk node
             cypher = """
             MERGE (c:Chunk {id: $chunk_id})
             ON CREATE SET 
                 c.text = $text,
+                c.summary = $summary,
                 c.doc_id = $doc_id,
                 c.page = $page,
                 c.table_id = $table_id,
@@ -385,6 +417,7 @@ def create_chunk_nodes_for_tables(observations: List[dict], doc_id: str, table_i
                 c.observation_count = $obs_count
             ON MATCH SET 
                 c.text = $text,
+                c.summary = $summary,
                 c.observation_count = $obs_count
             RETURN c.id as chunk_id
             """
@@ -392,6 +425,7 @@ def create_chunk_nodes_for_tables(observations: List[dict], doc_id: str, table_i
             result = session.run(cypher, {
                 'chunk_id': table_chunk_id,
                 'text': table_text,
+                'summary': summary_text,
                 'doc_id': doc_id,
                 'page': page,
                 'table_id': table_id,
@@ -426,6 +460,7 @@ def create_chunk_nodes_for_tables(observations: List[dict], doc_id: str, table_i
                 result = session.run(cypher, {
                     'chunk_id': row_chunk_id,
                     'text': row_text,
+                    'summary': None,  # Row chunks don't have summary
                     'doc_id': doc_id,
                     'page': page,
                     'table_id': table_id,
@@ -459,47 +494,78 @@ def create_chunk_nodes_for_tables(observations: List[dict], doc_id: str, table_i
         return []
 
 
-def extract_and_ingest_table_kg(structured_data: dict, doc_id: str, table_id: str) -> dict:
+def extract_and_ingest_table_kg(structured_data: dict, doc_id: str, table_id: str, summary_text: Optional[str] = None) -> dict:
     """Extract and ingest table knowledge graph to Neo4j + embed to Qdrant.
     
     Args:
         structured_data: Table data with headers, records, etc.
         doc_id: Document ID
         table_id: Table ID
+        summary_text: Optional table summary text
         
     Returns:
         Dictionary with ingestion results
     """
     try:
         # Extract table KG
-        from src.data.table_kg_extractor import extract_table_kg
-        analysis, observations = extract_table_kg(structured_data, doc_id, table_id, include_aggregates=True)
+        from src.data.table_processing.kg_extractor import extract_table_kg
+        kg_result = extract_table_kg(structured_data, doc_id, table_id, include_aggregates=True)
+        observations = kg_result.get('observations', [])
         
         if not observations:
             logger.warning(f"No observations extracted from table {table_id}")
-            return {"observations": 0, "qdrant_embeddings": 0}
+            return {
+                "table_type": kg_result.get('table_type', 'unknown'),
+                "observation_count": 0,
+                "ingested_to_neo4j": 0,
+                "qdrant_embeddings": 0,
+                "chunk_nodes": 0,
+                "neo4j_nodes_created": 0,
+                "neo4j_relationships_created": 0
+            }
         
         # Get page from structured data
         page = structured_data.get('page', 1)
         
-        # Create chunk nodes for graph retrieval
-        chunk_ids = create_chunk_nodes_for_tables(observations, doc_id, table_id, page)
-        logger.info(f"Created {len(chunk_ids)} chunk nodes for table {table_id}")
+        # Create chunk nodes for graph retrieval unless HTML table chunking is enabled
+        if USE_TABLE_HTML_CHUNKS:
+            chunk_ids = []
+            logger.info("Skipping KG-phase chunk nodes (USE_TABLE_HTML_CHUNKS=True)")
+        else:
+            chunk_ids = create_chunk_nodes_for_tables(observations, doc_id, table_id, page, summary_text)
+            logger.info(f"Created {len(chunk_ids)} chunk nodes for table {table_id}")
         
         # Ingest to Neo4j
-        neo4j_count = process_neo4j_batch(observations, doc_id, table_id)
+        neo4j_stats = process_neo4j_batch(observations, doc_id, table_id, summary_text)
         
-        # Embed to Qdrant
-        qdrant_count = embed_table_to_qdrant(observations, analysis, doc_id, table_id, page, structured_data)
+        # Embed to Qdrant unless HTML table chunking is enabled (to avoid duplication)
+        if USE_TABLE_HTML_CHUNKS:
+            qdrant_stats = {"total_embeddings": 0}
+            logger.info("Skipping legacy row/table-level Qdrant embeddings (USE_TABLE_HTML_CHUNKS=True)")
+        else:
+            qdrant_stats = embed_table_to_qdrant(observations, structured_data, doc_id, table_id, page, kg_result, summary_text)
         
-        logger.info(f"Table {table_id}: {neo4j_count} observations to Neo4j + {qdrant_count} embeddings to Qdrant")
+        logger.info(f"Table {table_id}: {neo4j_stats['nodes_created']} observations to Neo4j + {qdrant_stats.get('total_embeddings', 0)} embeddings to Qdrant")
         
         return {
-            "observations": neo4j_count,
-            "qdrant_embeddings": qdrant_count,
-            "chunk_nodes": len(chunk_ids)
+            "table_type": kg_result.get('table_type', 'unknown'),
+            "observation_count": len(observations),
+            "ingested_to_neo4j": neo4j_stats['nodes_created'],
+            "qdrant_embeddings": qdrant_stats.get('total_embeddings', 0),
+            "chunk_nodes": len(chunk_ids),
+            "neo4j_nodes_created": neo4j_stats.get('nodes_created', 0),
+            "neo4j_relationships_created": neo4j_stats.get('relationships_created', 0)
         }
         
     except Exception as e:
         logger.error(f"Failed to extract and ingest table KG for {table_id}: {e}")
-        return {"observations": 0, "qdrant_embeddings": 0, "error": str(e)}
+        return {
+            "table_type": "error",
+            "observation_count": 0,
+            "ingested_to_neo4j": 0,
+            "qdrant_embeddings": 0,
+            "chunk_nodes": 0,
+            "neo4j_nodes_created": 0,
+            "neo4j_relationships_created": 0,
+            "error": str(e)
+        }

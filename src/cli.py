@@ -5,11 +5,12 @@ import json
 import uuid
 import sys
 
-from .rag.indexing.indexer import init_collection, index_pdf
+from .indexing import VectorIndexer, index_nodes_vector
+from .data.pdf_ingestor import build_page_nodes
 from .rag.retrieval.retrieval_service import retrieval_service
 from .models.reranker  import rerank
-from .rag.qa_generation import generate_answer, generate_qa_pairs_for_doc
-from .rag.suggestions  import generate_suggestions_for_doc, batch_generate_suggestions
+from .rag.generation import generate_answer
+from .rag.generation import generate_qa_pairs_for_doc, generate_suggestions_for_doc, batch_generate_suggestions
 from .data.pdf_ingestor import extract_text_pages, extract_tables_per_page, build_page_nodes
 
 # New imports for reset command
@@ -21,12 +22,22 @@ from .config import NEO4J_DATABASE
 
 
 def cmd_index(args):
+    # Initialize vector indexer
+    indexer = VectorIndexer()
     if args.recreate:
-        init_collection()
+        indexer.initialize()
+    
     paths = glob.glob(args.pattern)
     total = 0
     for p in paths:
-        total += index_pdf(p)
+        # Extract nodes from PDF
+        nodes = build_page_nodes(p)
+        doc_id = os.path.splitext(os.path.basename(p))[0]
+        
+        # Index using new system
+        result = indexer.index_nodes(nodes, doc_id)
+        total += result.indexed_count if result.success else 0
+        
     print(f"[INDEX] Done: {total} chunks")
 
 
@@ -257,10 +268,6 @@ def cmd_chat(args):
                         
                         for i, ev in enumerate(evidence[:5], 1):  # Show top 5 sources
                             try:
-                                # Debug: Print the actual structure of the evidence object
-                                print(f"  🔍 Debug: Evidence {i} type: {type(ev)}")
-                                print(f"  🔍 Debug: Evidence {i} payload keys: {list(ev.payload.keys()) if hasattr(ev, 'payload') and ev.payload else 'No payload'}")
-                                
                                 # Extract source information from evidence using the correct structure
                                 if hasattr(ev, 'payload') and ev.payload:
                                     # Use the payload directly from Evidence object
@@ -282,7 +289,14 @@ def cmd_chat(args):
                                     
                                     score = getattr(ev, 'score', 'N/A')
                                     
+                                    # Get text preview for better context
+                                    text_preview = payload.get('text', '')[:100]
+                                    if len(text_preview) > 100:
+                                        text_preview += "..."
+                                    
                                     source_info = f"  {i}. {source_type}: {doc_id}, Page: {page}, Score: {score:.3f}"
+                                    if text_preview:
+                                        source_info += f"\n      Preview: {text_preview}"
                                     
                                     # Categorize by source type
                                     if source_type in ['paragraph', 'table_summary', 'table_record', 'table_column', 'table_row']:
@@ -298,7 +312,14 @@ def cmd_chat(args):
                                     source_type = payload.get('type', 'Unknown')
                                     score = getattr(ev, 'score', 'N/A')
                                     
+                                    # Get text preview for better context
+                                    text_preview = payload.get('text', '')[:100]
+                                    if len(text_preview) > 100:
+                                        text_preview += "..."
+                                    
                                     source_info = f"  {i}. {source_type}: {doc_id}, Page: {page}, Score: {score:.3f}"
+                                    if text_preview:
+                                        source_info += f"\n      Preview: {text_preview}"
                                     
                                     # Categorize by source type
                                     if source_type in ['paragraph', 'table_summary', 'table_record', 'table_column']:
@@ -332,21 +353,6 @@ def cmd_chat(args):
                             for source in graph_sources:
                                 print(source)
                         
-                        # Show text preview from top source
-                        if evidence:
-                            top_evidence = evidence[0]
-                            text_preview = ""
-                            
-                            # Try to get text from the correct location
-                            if hasattr(top_evidence, 'payload') and top_evidence.payload:
-                                text_preview = top_evidence.payload.get('text', '')[:200]
-                            elif hasattr(top_evidence, 'raw') and hasattr(top_evidence.raw, 'payload'):
-                                text_preview = top_evidence.raw.payload.get('text', '')[:200]
-                            
-                            if text_preview:
-                                if len(text_preview) > 200:
-                                    text_preview += "..."
-                                print(f"\n📖 Top source preview: {text_preview}")
                     else:
                         print("  No sources found in hybrid retrieval")
                     

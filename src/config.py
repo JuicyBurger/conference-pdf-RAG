@@ -1,75 +1,120 @@
+"""
+Configuration module for document-analyzer.
+
+This module provides all configuration settings used throughout the application.
+Settings are organized into logical groups with clear section headers.
+
+Only essential credentials and connection settings are loaded from environment variables.
+Hyperparameters and internal settings are defined directly in this file for easier maintenance.
+"""
+
 from dotenv import load_dotenv
 import os
 
+# Load environment variables
 load_dotenv()  # reads .env
 
-# Qdrant settings
-QDRANT_URL     = os.getenv("QDRANT_URL")
+# =============================================================================
+# CREDENTIALS - Loaded from environment variables
+# =============================================================================
+
+# Qdrant credentials and collections
+QDRANT_URL = os.getenv("QDRANT_URL")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "docs")
+QDRANT_CHAT_DB = os.getenv("QDRANT_CHAT_DB", "chat_history")
+QDRANT_ROOMS_DB = os.getenv("QDRANT_ROOMS_DB", "chat_rooms")
 QDRANT_QA_DB = os.getenv("QDRANT_QA_DB", "qa_suggestions")
 
-# LLM Provider settings
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama")  # "ollama" or "production"
-PRODUCTION_HOST = os.getenv("PRODUCTION_HOST", "http://localhost:8000")
-OLLAMA_HOST = os.getenv("OLLAMA_HOST") or os.getenv("PRODUCTION_OLLAMA")  # Prefer OLLAMA_HOST, fallback to legacy
-
-# Model settings
-DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "llama3.1:8b-instruct-fp16")  # Default for Ollama (answering)
-GRAPH_EXTRACT_MODEL = os.getenv("GRAPH_EXTRACT_MODEL", os.getenv("DEFAULT_GRAPH_EXTRACT_MODEL", "qwen2.5:7b-instruct-q4_K_M"))
-
-# Embedding model settings
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "dengcao/Qwen3-Embedding-4B:Q8_0")  # Default embedding model for Ollama
-
-# OCR model settings
-OCR_MODEL = os.getenv("OCR_MODEL", "benhaotang/Nanonets-OCR-s:latest")  # Default OCR model for table extraction
-
-if LLM_PROVIDER == "production":
-    # For vLLM, use the exact model name that vLLM serves (with forward slash and capital B)
-    DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "meta-llama/Llama-3.1-8B-Instruct")  # Default for vLLM Production
-
-# Pipeline settings
-# Defaults are tuned for Chinese: ~800 tokens per chunk with 120-token overlap
-CHUNK_OVERLAP  = int(os.getenv("CHUNK_OVERLAP", 120))
-CHUNK_MAX_CHARS = int(os.getenv("CHUNK_MAX_CHARS", 2000))
-
-# Backward compatibility
-OLLAMA_MODEL = DEFAULT_MODEL  # For existing code that uses OLLAMA_MODEL
-
-# Graph / Neo4j settings
+# Neo4j credentials and database
 NEO4J_URI = os.getenv("NEO4J_URI")
-# Support both NEO4J_USERNAME and legacy NEO4J_USER
 NEO4J_USERNAME = os.getenv("NEO4J_USERNAME") or os.getenv("NEO4J_USER")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD")
-# Database name (Neo4j 4.x+ multi-DB). Prefer NEO4J_DATABASE; default 'neo4j'
-NEO4J_DATABASE = os.getenv("NEO4J_DATABASE") or "neo4j"
-TRAINING_CORPUS_ID = os.getenv("TRAINING_CORPUS_ID", "default")
+NEO4J_DATABASE = os.getenv("NEO4J_DATABASE", "neo4j")
+
+# LLM provider and model settings
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "dengcao/Qwen3-Embedding-4B:Q8_0")
+GRAPH_EXTRACT_MODEL = os.getenv("GRAPH_EXTRACT_MODEL", "qwen2.5:7b-instruct-q4_K_M")
+DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "gpt-oss:20b")  # Default for Ollama (answering)
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", DEFAULT_MODEL)  # For backward compatibility
+
+# Machine-specific endpoints
+M416_3090 = os.getenv("M416_3090")
+M416_3090ti = os.getenv("M416_3090ti")
+M416_4090 = os.getenv("M416_4090")
+OLLAMA_HOST = os.getenv("PRODUCTION_OLLAMA")
+
+# Training corpus ID
+TRAINING_CORPUS_ID = "sinon"
+
+# =============================================================================
+# DOCUMENT CHUNKING PARAMETERS - Defined directly in code
+# =============================================================================
+
+# Pipeline settings - Optimized chunking for retrieval
+# Smaller chunks improve recall and avoid overly long nodes in Qdrant
+# Tune for finer splitting of long paragraphs
+CHUNK_OVERLAP = 80
+CHUNK_MAX_CHARS = 300
+
+# Graph extraction chunking parameters
+GRAPH_SPLIT_CHUNK_SIZE = 800
+GRAPH_SPLIT_OVERLAP = 60
+
+# =============================================================================
+# FILE PATHS AND DIRECTORIES - Defined directly in code
+# =============================================================================
+
+# Prepared data directory for caching full-document extraction
+PREPARED_DIR = "data/prepared"
+
+# =============================================================================
+# RAG (RETRIEVAL-AUGMENTED GENERATION) SETTINGS - Defined directly in code
+# =============================================================================
 
 # RAG routing defaults
-RAG_DEFAULT_MODE = os.getenv("RAG_DEFAULT_MODE", "vector")  # vector | graph | hybrid
+RAG_DEFAULT_MODE = "hybrid"  # vector | graph | hybrid
+RAG_DISABLE_QUERY_REWRITER = True
 
-# Graph traversal / retrieval knobs
-GRAPH_MAX_HOPS = int(os.getenv("GRAPH_MAX_HOPS", 2))
-GRAPH_EXPANSION_TOP_K = int(os.getenv("GRAPH_EXPANSION_TOP_K", 12))
+# Graph traversal / retrieval parameters
+GRAPH_MAX_HOPS = 3
+GRAPH_EXPANSION_TOP_K = 6
 
-# Graph extraction/performance knobs
-# Chunking for graph extraction pipeline
-GRAPH_SPLIT_CHUNK_SIZE = int(os.getenv("GRAPH_SPLIT_CHUNK_SIZE", 400))
-GRAPH_SPLIT_OVERLAP = int(os.getenv("GRAPH_SPLIT_OVERLAP", 40))
+# Batch processing sizes
+INDEX_BATCH_SIZE = 100
+GRAPH_BATCH_SIZE = 100
+
+# =============================================================================
+# LLM GENERATION PARAMETERS - Defined directly in code
+# =============================================================================
+
+# Response generation parameters
+RESPONSE_MAX_TOKENS = 512
+RESPONSE_TEMPERATURE = 0.0
+DEFAULT_REASONING_EFFORT = "low"  # "low" | "medium" | "high" | ""
+
+# Chat title generation toggle
+CHAT_USE_LLM_ROOM_TITLE = True
+
+# =============================================================================
+# KNOWLEDGE GRAPH EXTRACTION CONFIGURATION - Defined directly in code
+# =============================================================================
 
 # LLM extractor controls
-GRAPH_EXTRACT_MAX_TRIPLETS = int(os.getenv("GRAPH_EXTRACT_MAX_TRIPLETS", 6))
-GRAPH_EXTRACT_NUM_WORKERS = int(os.getenv("GRAPH_EXTRACT_NUM_WORKERS", 1))
+GRAPH_EXTRACT_MAX_TRIPLETS = 6
+GRAPH_EXTRACT_NUM_WORKERS = 2
 
-# Whether to write (:Document)-[:HAS_CHUNK]->(:Chunk) to Neo4j.
-# Default on for training pipeline to ensure Neo4j and Qdrant synchronization.
-GRAPH_WRITE_CHUNKS_TO_NEO4J = bool(int(os.getenv("GRAPH_WRITE_CHUNKS_TO_NEO4J", "1")))
+# Whether to write chunks to Neo4j
+GRAPH_WRITE_CHUNKS_TO_NEO4J = True
 
-# Optional guidance types for DynamicLLMPathExtractor
-# If env vars are not provided, use project defaults below.
-_allowed_entities_raw = os.getenv("GRAPH_ALLOWED_ENTITY_TYPES", "")
-_allowed_relations_raw = os.getenv("GRAPH_ALLOWED_RELATION_TYPES", "")
+# Skip KG extraction during training ingestion (embedding-only runs)
+SKIP_GRAPH_EXTRACTION = False
 
+# 1: disable query relevance signal, 0: enable query relevance signal
+DISABLE_QUERY_SIGNAL = 1
+
+# Entity and relation type definitions
+# Default entity types
 DEFAULT_GRAPH_ALLOWED_ENTITY_TYPES = [
     # orgs & people
     "Company",            # 上市公司/關係企業/供應商/客戶(若已知)
@@ -97,6 +142,7 @@ DEFAULT_GRAPH_ALLOWED_ENTITY_TYPES = [
     "Percentage",         # 百分比節點(比重/毛利率…)
 ]
 
+# Default relation types
 DEFAULT_GRAPH_ALLOWED_RELATION_TYPES = [
     # structure & governance
     "SUBSIDIARY_OF",          # Subsidiary -> Company
@@ -131,7 +177,15 @@ DEFAULT_GRAPH_ALLOWED_RELATION_TYPES = [
     # structural relationships (for graph traversal)
     "HAS_CHUNK",              # Document -> Chunk (structural)
     "HAS_DOCUMENT",           # Collection -> Document (structural)
+    "HAS_ENTITY",             # Document -> Entity (structural, minimal wiring)
+    # tables & observations
+    "IN_TABLE",               # Observation -> Table
+    "HAS_OBSERVATION",        # Chunk -> Observation (optional wiring)
 ]
+
+# Parse from environment or use defaults - allow override via env if needed
+_allowed_entities_raw = os.getenv("GRAPH_ALLOWED_ENTITY_TYPES", "")
+_allowed_relations_raw = os.getenv("GRAPH_ALLOWED_RELATION_TYPES", "")
 
 GRAPH_ALLOWED_ENTITY_TYPES = (
     [s.strip() for s in _allowed_entities_raw.split(",") if s.strip()]
@@ -144,3 +198,24 @@ GRAPH_ALLOWED_RELATION_TYPES = (
     if _allowed_relations_raw.strip()
     else DEFAULT_GRAPH_ALLOWED_RELATION_TYPES
 )
+
+# =============================================================================
+# TABLE EXTRACTION AND PROCESSING - Defined directly in code
+# =============================================================================
+
+# Table HTML chunking toggle
+USE_TABLE_HTML_CHUNKS = True
+
+# Retain saved table HTML files after ingestion
+RETAIN_TABLE_HTML_FILES = True
+
+# =============================================================================
+# EXTERNAL API ENDPOINTS - Defined directly in code
+# =============================================================================
+
+# Remote OCR API for table extraction
+OCR_API_URL = "http://192.168.100.32:9010/ocr/file"
+OCR_CLEANUP_URL = ""
+
+# LLM cleanup endpoint
+LLM_CLEANUP_URL = ""

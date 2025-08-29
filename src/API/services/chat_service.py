@@ -438,8 +438,17 @@ class AsyncChatService:
         room_id = str(uuid.uuid4())
         timestamp = datetime.now(timezone.utc).isoformat()
         
-        # Generate room title from first message
-        room_title = await self._generate_room_title(first_message)
+        # Generate room title: optionally skip LLM for speed
+        try:
+            from src.config import CHAT_USE_LLM_ROOM_TITLE
+        except Exception:
+            CHAT_USE_LLM_ROOM_TITLE = False
+        if CHAT_USE_LLM_ROOM_TITLE:
+            room_title = await self._generate_room_title(first_message)
+        else:
+            # Fast heuristic: first 12 chars or fallback
+            title = (first_message or "").strip()
+            room_title = title[:12] if title else "新對話"
         
         room_data = {
             "room_id": room_id,
@@ -523,6 +532,8 @@ class AsyncChatService:
             default_model = get_default_model()
             
             options = {"temperature": 0.3, "max_tokens": 20}
+            # Use low reasoning for fast/cheap title generation
+            options["reasoning_effort"] = "low"
             
             # Generate title using LLM
             loop = asyncio.get_event_loop()

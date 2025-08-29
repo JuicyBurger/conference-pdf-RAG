@@ -18,11 +18,31 @@ import time
 # Import from our existing RAG system
 import sys
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
-from src.rag.indexing.indexer import index_pdf
+from src.indexing import index_nodes_vector
+from src.data.pdf_ingestor import build_page_nodes
 from src.config import QDRANT_COLLECTION
 from werkzeug.utils import secure_filename
-from src.rag.graph.indexer import ingest_pdfs_to_graph
+from src.rag.graph.indexer import ingest_pdfs_to_graph, build_graph_from_nodes
 from src.rag.utils import handle_errors, DatabaseError, setup_logger
+from src.indexing import VectorIndexer
+from src.rag.graph.indexer import extract_entities_relations_and_index
+from llama_index.graph_stores.neo4j import Neo4jPropertyGraphStore
+from src.config import (
+    QDRANT_COLLECTION,
+    INDEX_BATCH_SIZE,
+    GRAPH_BATCH_SIZE,
+    TRAINING_CORPUS_ID,
+    NEO4J_USERNAME,
+    NEO4J_PASSWORD,
+    NEO4J_URI,
+    NEO4J_DATABASE,
+    SKIP_GRAPH_EXTRACTION,
+    GRAPH_WRITE_CHUNKS_TO_NEO4J,
+)
+
+import json
+from math import ceil
+from time import time
 
 # Configure logging
 logger = setup_logger(__name__)
@@ -173,12 +193,26 @@ class AsyncIngestionService:
             if scope:
                 extra_payload["scope"] = scope
 
-            chunks_indexed = index_pdf(
-                file_path,
-                collection_name=QDRANT_COLLECTION,
+            # Extract nodes and index using new system
+            nodes = build_page_nodes(file_path)
+
+            # Optionally write chunks to Neo4j before vector indexing
+            if GRAPH_WRITE_CHUNKS_TO_NEO4J:
+                try:
+                    self.logger.info(f"[Ingestion] Writing chunks to Neo4j for doc_id={preferred_doc_id}")
+                    # Respect training corpus scoping when available
+                    corpus_id = extra_payload.get("corpus_id") if isinstance(extra_payload, dict) else None
+                    _ = build_graph_from_nodes(nodes, preferred_doc_id, corpus_id=corpus_id)
+                except Exception as e:
+                    self.logger.warning(f"[Ingestion] Neo4j chunk ingest skipped due to error: {e}")
+
+            result = index_nodes_vector(
+                nodes=nodes,
                 doc_id=preferred_doc_id,
+                collection_name=QDRANT_COLLECTION,
                 extra_payload=extra_payload or None,
             )
+            chunks_indexed = result.indexed_count if result.success else 0
             
             # Update progress
             self.progress.update_task(
@@ -282,14 +316,21 @@ class AsyncIngestionService:
         return task_id
 
     @handle_errors(error_class=DatabaseError, fallback_return="")
-    def start_training_ingestion(self, files: list, training_room_id: str | None, progress_callback: Callable = None) -> str:
-        """Start GraphRAG training ingestion with progress tracking."""
+    def start_training_ingestion(self, files: list, training_room_id: str | None, progress_callback: Callable = None, *, skip_graph: bool | None = None, index_batch_size: int | None = None, graph_batch_size: int | None = None) -> str:
+        """Start GraphRAG training ingestion with progress tracking.
+        Optional overrides: skip_graph, index_batch_size, graph_batch_size
+        """
         # Save files synchronously and create task
         files_info, task_id = self.save_uploaded_files_sync(files)
         file_names = [info["original_filename"] for info in files_info]
 
         # Mark as processing
         self.progress.create_task(task_id, len(files_info), file_names)
+
+        # Resolve effective settings
+        effective_skip_graph = SKIP_GRAPH_EXTRACTION if skip_graph is None else bool(skip_graph)
+        effective_index_bs = INDEX_BATCH_SIZE if index_batch_size is None else int(index_batch_size)
+        effective_graph_bs = GRAPH_BATCH_SIZE if graph_batch_size is None else int(graph_batch_size)
 
         def _run():
             try:
@@ -300,12 +341,69 @@ class AsyncIngestionService:
                     if progress_callback:
                         progress_callback(task_id, f"Training ingest {info['original_filename']}")
                     try:
-                        # Try to pass a corpus id if available via env; keep back-compat room id
-                        from src.config import TRAINING_CORPUS_ID
-                        result = ingest_pdfs_to_graph([info["path"]], training_room_id=training_room_id, training_corpus_id=TRAINING_CORPUS_ID)
-                        # Update message with summary
-                        summary = result.get(info["path"], {})
-                        self.progress.update_task(task_id, message=f"Neo4j {summary.get('neo4j_chunks', 0)} / Qdrant {summary.get('qdrant_chunks', 0)}")
+                        # Prepared artifacts path
+                        from src.config import PREPARED_DIR
+                        # Prefer cache folder named after original filename (no extension)
+                        original_doc_id = info["preferred_doc_id"]
+                        saved_doc_id = os.path.splitext(os.path.basename(info["path"]))[0]
+                        base_dir_original = os.path.join(PREPARED_DIR, original_doc_id)
+                        base_dir_saved = os.path.join(PREPARED_DIR, saved_doc_id)
+                        # Choose base_dir: if original cache exists use it, else saved name
+                        if os.path.exists(os.path.join(base_dir_original, "nodes_all.json")):
+                            doc_id = original_doc_id
+                            base_dir = base_dir_original
+                        else:
+                            doc_id = saved_doc_id
+                            base_dir = base_dir_saved
+                        # Build prepared if missing; write under original name for stable caching
+                        if not os.path.exists(os.path.join(base_dir, "nodes_all.json")):
+                            print(f"🔧 Building prepared data for '{original_doc_id}'...")
+                            from src.data.pdf_ingestor import build_page_nodes
+                            build_page_nodes(info["path"], save_prepared=True, doc_id_override=original_doc_id)
+                            doc_id = original_doc_id
+                            base_dir = base_dir_original
+                        else:
+                            print(f"✅ Using existing prepared data for '{original_doc_id}'")
+                        # Load nodes for batch processing
+                        import json
+                        with open(os.path.join(base_dir, "nodes_all.json"), "r", encoding="utf-8") as f:
+                            nodes = json.load(f)
+                        print(f"📊 Loaded {len(nodes)} nodes for batch processing")
+                        print(f"🔢 Batch configuration: INDEX_BATCH_SIZE={effective_index_bs}, GRAPH_BATCH_SIZE={effective_graph_bs}")
+                        print(f"📦 Estimated batches: {ceil(len(nodes) / effective_index_bs)} index batches, {ceil(len(nodes) / effective_graph_bs)} graph batches")
+                        
+                        # Write chunks to Neo4j (if enabled)
+                        if GRAPH_WRITE_CHUNKS_TO_NEO4J:
+                            try:
+                                print(f"🔗 Writing chunks to Neo4j for doc_id={doc_id}")
+                                from src.rag.graph.indexer import build_graph_from_nodes
+                                chunk_count = build_graph_from_nodes(nodes, doc_id, corpus_id=TRAINING_CORPUS_ID)
+                                print(f"✅ Wrote {chunk_count} chunks to Neo4j")
+                            except Exception as e:
+                                print(f"⚠️ Neo4j chunk ingest failed: {e}")
+                        
+                        # KG (optional)
+                        if effective_skip_graph:
+                            erc = {"entities": 0, "relations": 0, "communities": 0, "qdrant_vectors": 0}
+                        else:
+                            # Temporarily patch batch size for this call
+                            global GRAPH_BATCH_SIZE
+                            old_gbs = GRAPH_BATCH_SIZE
+                            GRAPH_BATCH_SIZE = effective_graph_bs
+                            try:
+                                erc = self._batch_graph_extract(nodes, doc_id, TRAINING_CORPUS_ID, base_dir, task_id)
+                            finally:
+                                GRAPH_BATCH_SIZE = old_gbs
+                        # Qdrant indexing
+                        extra_payload = {"corpus_id": TRAINING_CORPUS_ID, "scope": "graph"}
+                        global INDEX_BATCH_SIZE
+                        old_ibs = INDEX_BATCH_SIZE
+                        INDEX_BATCH_SIZE = effective_index_bs
+                        try:
+                            vec_count = self._batch_index_nodes(nodes, doc_id, extra_payload, base_dir, task_id)
+                        finally:
+                            INDEX_BATCH_SIZE = old_ibs
+                        self.progress.update_task(task_id, message=f"Neo4j E={erc.get('entities')} R={erc.get('relations')} / Qdrant {vec_count}")
                     finally:
                         try:
                             os.remove(info["path"])
@@ -329,6 +427,92 @@ class AsyncIngestionService:
     def list_ingestion_history(self, limit: int = 50) -> list:
         """List recent ingestion tasks"""
         return self.progress.list_tasks(limit)
+
+    def _batch_index_nodes(self, nodes: list, doc_id: str, extra_payload: dict | None, base_dir: str, task_id: str) -> int:
+        indexer = VectorIndexer(QDRANT_COLLECTION)
+        # Proactively ensure payload indexes (including TEXT on 'text') before batching
+        try:
+            indexer._ensure_indexes_exist()
+        except Exception as e:
+            self.progress.update_task(task_id, message=f"Warning: failed ensuring payload indexes: {e}")
+        total = 0
+        total_batches = ceil(len(nodes) / INDEX_BATCH_SIZE) if nodes else 0
+        print(f"🚀 Starting Qdrant indexing: {len(nodes)} nodes in {total_batches} batches of {INDEX_BATCH_SIZE}")
+        ckpt_path = os.path.join(base_dir, ".index_checkpoint.json")
+        start_batch = 0
+        try:
+            if os.path.exists(ckpt_path):
+                with open(ckpt_path, "r", encoding="utf-8") as f:
+                    start_batch = int((json.load(f) or {}).get("next_batch", 0))
+        except Exception:
+            start_batch = 0
+        for b in range(start_batch, total_batches):
+            t0 = time()
+            batch = nodes[b*INDEX_BATCH_SIZE:(b+1)*INDEX_BATCH_SIZE]
+            print(f"📦 Processing Qdrant batch {b+1}/{total_batches} ({len(batch)} nodes)...")
+            self.progress.update_task(task_id, message=f"Indexing batch {b+1}/{total_batches} ({len(batch)} nodes)...")
+            res = indexer.index_nodes(batch, doc_id, extra_payload)
+            dt = time() - t0
+            total += res.indexed_count if res.success else 0
+            self.progress.update_task(task_id, message=f"Indexed batch {b+1}/{total_batches} in {dt:.1f}s (+{res.indexed_count if res.success else 0})")
+            try:
+                with open(ckpt_path, "w", encoding="utf-8") as f:
+                    json.dump({"next_batch": b+1}, f)
+            except Exception:
+                pass
+        try:
+            if os.path.exists(ckpt_path):
+                os.remove(ckpt_path)
+        except Exception:
+            pass
+        return total
+
+    def _batch_graph_extract(self, nodes: list, doc_id: str, corpus_id: str, base_dir: str, task_id: str) -> dict:
+        if SKIP_GRAPH_EXTRACTION:
+            self.progress.update_task(task_id, message="Skipping KG extraction (SKIP_GRAPH_EXTRACTION=1)")
+            return {"entities": 0, "relations": 0, "communities": 0, "qdrant_vectors": 0}
+        print(f"🧠 Starting KG extraction: {len(nodes)} nodes in {ceil(len(nodes) / GRAPH_BATCH_SIZE)} batches of {GRAPH_BATCH_SIZE}")
+        graph_store = Neo4jPropertyGraphStore(
+            username=NEO4J_USERNAME,
+            password=NEO4J_PASSWORD,
+            url=NEO4J_URI,
+            database=NEO4J_DATABASE,
+        )
+        texts = [n.get("text", "") for n in nodes if n.get("text")]  
+        total_batches = ceil(len(texts) / GRAPH_BATCH_SIZE) if texts else 0
+        summary = {"entities": 0, "relations": 0, "communities": 0, "qdrant_vectors": 0}
+        ckpt_path = os.path.join(base_dir, ".graph_checkpoint.json")
+        start_batch = 0
+        try:
+            if os.path.exists(ckpt_path):
+                with open(ckpt_path, "r", encoding="utf-8") as f:
+                    start_batch = int((json.load(f) or {}).get("next_batch", 0))
+        except Exception:
+            start_batch = 0
+        for b in range(start_batch, total_batches):
+            t0 = time()
+            chunk_texts = texts[b*GRAPH_BATCH_SIZE:(b+1)*GRAPH_BATCH_SIZE]
+            print(f"🧠 Processing KG batch {b+1}/{total_batches} ({len(chunk_texts)} texts)...")
+            self.progress.update_task(task_id, message=f"KG extract batch {b+1}/{total_batches} ({len(chunk_texts)} texts)...")
+            stats = extract_entities_relations_and_index(chunk_texts, doc_id, corpus_id, graph_store)
+            dt = time() - t0
+            for k in ("entities", "relations", "communities", "qdrant_vectors"):
+                try:
+                    summary[k] = (summary.get(k, 0) or 0) + (stats.get(k, 0) or 0)
+                except Exception:
+                    pass
+            self.progress.update_task(task_id, message=f"KG batch {b+1}/{total_batches} done in {dt:.1f}s")
+            try:
+                with open(ckpt_path, "w", encoding="utf-8") as f:
+                    json.dump({"next_batch": b+1}, f)
+            except Exception:
+                pass
+        try:
+            if os.path.exists(ckpt_path):
+                os.remove(ckpt_path)
+        except Exception:
+            pass
+        return summary
 
 
 # Global service instance

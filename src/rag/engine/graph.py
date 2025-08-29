@@ -59,7 +59,7 @@ class GraphRAGEngine(BaseRAGEngine):
             with get_driver().session(database=NEO4J_DATABASE) as ses:
                 result = ses.run(cypher).data()
                 rel_types = [row['rel_type'] for row in result]
-                logger.info(f"Discovered {len(rel_types)} relationship types in graph: {rel_types}")
+                logger.info(f"Discovered {len(rel_types)} relationship types in graph")
                 return rel_types
         except Exception as e:
             logger.warning(f"Failed to discover relationship types: {e}")
@@ -97,10 +97,10 @@ class GraphRAGEngine(BaseRAGEngine):
         
         # Convert to list and sort for consistency
         result = sorted(list(available_types))
-        logger.info(f"Using {len(result)} relationship types for traversal: {result}")
+        logger.info(f"Using {len(result)} relationship types for traversal")
         return result
     
-    def expand_from_vector_seeds(self, seed_hits, top_k=8, hops=2, allowed_rels=None, query: str = None):
+    def expand_from_vector_seeds(self, seed_hits, top_k=12, hops=2, allowed_rels=None, query: str = None):
         """Expand from vector search results using Neo4j k-hop traversal.
         
         Args:
@@ -141,10 +141,11 @@ class GraphRAGEngine(BaseRAGEngine):
                 LIMIT 5
                 """
                 existing_chunks = ses.run(check_cypher, {"seed_ids": seed_ids}).data()
-                logger.info(f"🔍 Debug: Found {len(existing_chunks)} seed chunks in Neo4j: {existing_chunks}")
+                logger.info(f"🔍 Debug: Found {len(existing_chunks)} seed chunks in Neo4j")
                 
                 if not existing_chunks:
                     logger.warning("🔍 Debug: No seed chunks found in Neo4j - this is the problem!")
+                    logger.info(f"🔍 Debug: Sample seed hit payloads: {[{k: v for k, v in (getattr(h, 'payload', {}) or {}).items() if k in ('doc_id','page','type')} for h in seed_hits[:3]]}")
                     
                     # Try alternative approach: look for chunks by doc_id and page instead of ID
                     logger.info("🔍 Debug: Trying alternative lookup by doc_id and page...")
@@ -167,8 +168,9 @@ class GraphRAGEngine(BaseRAGEngine):
                         })
                     
                     if seed_hit_data:
+                        logger.info(f"🔍 Debug: Alt lookup input: {seed_hit_data}")
                         alt_existing_chunks = ses.run(alt_check_cypher, {"seed_hits": seed_hit_data}).data()
-                        logger.info(f"🔍 Debug: Alternative lookup found {len(alt_existing_chunks)} chunks: {alt_existing_chunks}")
+                        logger.info(f"🔍 Debug: Alternative lookup found {len(alt_existing_chunks)} chunks")
                         
                         if alt_existing_chunks:
                             # Use the found chunk IDs instead
@@ -177,20 +179,21 @@ class GraphRAGEngine(BaseRAGEngine):
                         else:
                             logger.warning("🔍 Debug: No chunks found even with alternative lookup")
                             
-                            # Special handling for table embeddings
-                            # Check if any of the seed hits are table embeddings
+                            # Try creating temporary chunk seeds from seed hits so traversal can proceed
+                            # 1) Prefer table embeddings if present
                             table_embeddings = []
                             for hit in seed_hits:
                                 payload = hit.payload if hasattr(hit, 'payload') else {}
                                 if payload.get('level') in ['row', 'table'] or 'table' in payload.get('type', ''):
                                     table_embeddings.append(hit)
                             
+                            temp_chunk_ids = []
+                            temp_doc_id = None
                             if table_embeddings:
                                 logger.info(f"🔍 Debug: Found {len(table_embeddings)} table embeddings, creating temporary chunks")
-                                # Create temporary chunk nodes for table embeddings
-                                temp_chunk_ids = []
                                 for hit in table_embeddings[:3]:  # Limit to 3
                                     payload = hit.payload if hasattr(hit, 'payload') else {}
+                                    temp_doc_id = temp_doc_id or payload.get('doc_id', '')
                                     temp_chunk_id = f"temp_{payload.get('doc_id', '')}_{payload.get('table_id', '')}_{payload.get('level', '')}"
                                     
                                     # Create temporary chunk node
@@ -213,12 +216,86 @@ class GraphRAGEngine(BaseRAGEngine):
                                         'level': payload.get('level', 'table')
                                     })
                                     temp_chunk_ids.append(temp_chunk_id)
-                                
-                                if temp_chunk_ids:
-                                    seed_ids = temp_chunk_ids
-                                    logger.info(f"🔍 Debug: Created temporary chunk IDs: {temp_chunk_ids}")
-                                else:
-                                    return []
+                            else:
+                                # 2) General fallback: create temporary chunks for top paragraph/other seeds
+                                try:
+                                    import hashlib
+                                except Exception:
+                                    hashlib = None  # extremely unlikely
+                                logger.info("🔍 Debug: Creating temporary chunk seeds from top vector hits (paragraphs)")
+                                for hit in seed_hits[:3]:  # limit to 3
+                                    payload = hit.payload if hasattr(hit, 'payload') else {}
+                                    doc_id_val = payload.get('doc_id', '')
+                                    page_val = payload.get('page', '')
+                                    text_val = (payload.get('text', '') or '')
+                                    ctype_val = payload.get('type', 'paragraph')
+                                    if not (doc_id_val or text_val):
+                                        continue
+                                    temp_doc_id = temp_doc_id or doc_id_val
+                                    # Stable ID based on content to avoid duplicates
+                                    if hashlib is not None:
+                                        seed_str = f"{doc_id_val}|{page_val}|{ctype_val}|{text_val[:64]}".encode("utf-8", errors="ignore")
+                                        chunk_hash = hashlib.md5(seed_str).hexdigest()
+                                        temp_chunk_id = f"temp_{chunk_hash}"
+                                    else:
+                                        temp_chunk_id = f"temp_{doc_id_val}_{page_val}"
+                                    temp_cypher = """
+                                    MERGE (c:Chunk {id: $chunk_id})
+                                    ON CREATE SET 
+                                        c.text = $text,
+                                        c.doc_id = $doc_id,
+                                        c.page = $page,
+                                        c.type = $ctype,
+                                        c.temp = true
+                                    """
+                                    ses.run(temp_cypher, {
+                                        'chunk_id': temp_chunk_id,
+                                        'text': text_val[:200],
+                                        'doc_id': doc_id_val,
+                                        'page': page_val,
+                                        'ctype': ctype_val or 'paragraph',
+                                    })
+                                    temp_chunk_ids.append(temp_chunk_id)
+
+                            # If we created any temporary chunks, wire minimal doc connections to enable traversal
+                            if temp_chunk_ids:
+                                seed_ids = temp_chunk_ids
+                                logger.info(f"🔍 Debug: Created temporary chunk IDs: {temp_chunk_ids}")
+                                try:
+                                    if temp_doc_id:
+                                        # Ensure Document exists
+                                        ses.run(
+                                            """
+                                            MERGE (d:Document {doc_id: $doc_id})
+                                            ON CREATE SET d.name = $doc_id
+                                            """,
+                                            {"doc_id": temp_doc_id},
+                                        )
+                                        # Connect temp chunks to Document
+                                        ses.run(
+                                            """
+                                            UNWIND $cids AS cid
+                                            MATCH (c:Chunk {id: cid})
+                                            MERGE (d:Document {doc_id: $doc_id})
+                                            MERGE (d)-[:HAS_CHUNK]->(c)
+                                            """,
+                                            {"cids": temp_chunk_ids, "doc_id": temp_doc_id},
+                                        )
+                                        # Connect Document to all nodes having this doc_id (not only label 'Entity')
+                                        ses.run(
+                                            """
+                                            MATCH (n {doc_id: $doc_id})
+                                            WHERE NOT 'Document' IN labels(n)
+                                            WITH collect(n) AS nodes
+                                            MERGE (d:Document {doc_id: $doc_id})
+                                            WITH d, nodes
+                                            UNWIND nodes AS n
+                                            MERGE (d)-[:HAS_ENTITY]->(n)
+                                            """,
+                                            {"doc_id": temp_doc_id},
+                                        )
+                                except Exception as wire_err:
+                                    logger.debug(f"🔍 Debug: Failed to wire temporary chunks to Document/Entities: {wire_err}")
                             else:
                                 return []
                 
@@ -230,22 +307,31 @@ class GraphRAGEngine(BaseRAGEngine):
                 ORDER BY count DESC
                 LIMIT 10
                 """
-                rel_counts = ses.run(rel_check_cypher, {"seed_ids": seed_ids}).data()
-                logger.info(f"🔍 Debug: Relationship types from seed chunks: {rel_counts}")
+                # Use undirected relationships to include incoming edges (e.g., Document->HAS_CHUNK->Chunk)
+                rel_counts = ses.run(
+                    """
+                    UNWIND $seed_ids AS sid
+                    MATCH (c:Chunk {id: sid})-[r]-(n)
+                    RETURN DISTINCT type(r) AS rel_type, count(*) AS count
+                    ORDER BY count DESC
+                    LIMIT 10
+                    """,
+                    {"seed_ids": seed_ids},
+                ).data()
+                logger.info(f"🔍 Debug: Relationship types from seed chunks: {len(rel_counts)} (top few shown)")
                 
                 # Check if any of our allowed relationships exist from these chunks
-                allowed_rel_check_cypher = """
-                UNWIND $seed_ids AS sid
-                MATCH (c:Chunk {id: sid})-[r]->(n)
-                WHERE type(r) IN $allowedRels
-                RETURN DISTINCT type(r) AS rel_type, count(*) AS count
-                ORDER BY count DESC
-                """
-                allowed_rel_counts = ses.run(allowed_rel_check_cypher, {
-                    "seed_ids": seed_ids,
-                    "allowedRels": allowed_rels
-                }).data()
-                logger.info(f"🔍 Debug: Allowed relationship types from seed chunks: {allowed_rel_counts}")
+                allowed_rel_counts = ses.run(
+                    """
+                    UNWIND $seed_ids AS sid
+                    MATCH (c:Chunk {id: sid})-[r]-(n)
+                    WHERE type(r) IN $allowedRels
+                    RETURN DISTINCT type(r) AS rel_type, count(*) AS count
+                    ORDER BY count DESC
+                    """,
+                    {"seed_ids": seed_ids, "allowedRels": allowed_rels},
+                ).data()
+                logger.info(f"🔍 Debug: Allowed relationship types from seed chunks: {len(allowed_rel_counts)} (top few shown)")
                 
                 if not allowed_rel_counts:
                     logger.warning("🔍 Debug: No allowed relationships found from seed chunks!")
@@ -258,14 +344,14 @@ class GraphRAGEngine(BaseRAGEngine):
                     LIMIT 10
                     """
                     all_rel_counts = ses.run(all_rel_check_cypher, {"seed_ids": seed_ids}).data()
-                    logger.info(f"🔍 Debug: ALL relationship types from seed chunks (2 hops): {all_rel_counts}")
+                    logger.info(f"🔍 Debug: ALL relationship types from seed chunks (2 hops): {len(all_rel_counts)} (top few shown)")
                     
                     # If we have relationships but none are in our allowed list, let's use ALL relationships
                     if all_rel_counts:
                         logger.info("🔍 Debug: Found relationships but none in allowed list. Using ALL relationships.")
                         # Extract all relationship types found
                         all_rel_types = [rel['rel_type'] for rel in all_rel_counts]
-                        logger.info(f"🔍 Debug: Using ALL discovered relationship types: {all_rel_types}")
+                        logger.info(f"🔍 Debug: Using ALL discovered relationship types: {len(all_rel_types)}")
                         allowed_rels = all_rel_types
                     else:
                         logger.warning("🔍 Debug: No relationships found at all from seed chunks")
@@ -336,7 +422,7 @@ class GraphRAGEngine(BaseRAGEngine):
             
             logger.info(f"🔍 Debug: Cypher query returned {len(rows)} results")
             if rows:
-                logger.info(f"🔍 Debug: First result: {rows[0]}")
+                logger.info(f"🔍 Debug: First result returned")
             
             return rows
         except Exception as e:

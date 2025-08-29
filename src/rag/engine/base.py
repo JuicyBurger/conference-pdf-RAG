@@ -120,7 +120,7 @@ class BaseRAGEngine(ABC):
             Generated answer
         """
         # Import here to avoid circular dependencies
-        from ..qa_generation import generate_answer
+        from ..generation import generate_answer
         
         # Convert evidence to raw hits for backward compatibility
         raw_hits = [ev.raw for ev in evidence]

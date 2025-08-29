@@ -157,7 +157,7 @@ try:
     from llama_index.core.llms import LLM, ChatMessage, MessageRole, CompletionResponse, ChatResponse
     from llama_index.core.base.llms.types import LLMMetadata
     from src.models.client_factory import get_llm_client, get_default_model
-    from src.config import LLM_PROVIDER, OLLAMA_HOST, DEFAULT_MODEL
+    from src.config import OLLAMA_HOST, DEFAULT_MODEL
 
     class LlamaIndexJinaEmbedding(BaseEmbedding):
         """Adapter to use our Ollama embedding model as LlamaIndex embedding backend.
@@ -378,11 +378,11 @@ try:
         from llama_index.core.callbacks import CallbackManager, LlamaDebugHandler
         
         # Import configuration
-        from src.config import LLM_PROVIDER, DEFAULT_MODEL, OLLAMA_HOST, GRAPH_EXTRACT_MODEL
+        from src.config import DEFAULT_MODEL, OLLAMA_HOST, GRAPH_EXTRACT_MODEL
         
-        # Prefer LlamaIndex built-in LLM wrappers to satisfy extractor expectations
+        # Use OLLAMA_HOST as the production host
         try:
-            if LLM_PROVIDER.lower() == "ollama":
+            if OLLAMA_HOST:
                 from llama_index.llms.ollama import Ollama
                 # Default (answering) model for general usage
                 default_llm = Ollama(

@@ -1,21 +1,109 @@
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
-from ollama import Client
+from openai import OpenAI
+from ollama import Client  # For backward compatibility
 import pandas as pd
 from pydantic import BaseModel
 import json
 import requests
 from typing import Union, Dict, Any, Optional, List
 
-from dotenv import load_dotenv
 import os
-load_dotenv()
+
+try:
+    # Load default decoding options
+    from src.config import RESPONSE_MAX_TOKENS, RESPONSE_TEMPERATURE, DEFAULT_REASONING_EFFORT
+except Exception:
+    # Fallback values if config import fails
+    RESPONSE_MAX_TOKENS = 512
+    RESPONSE_TEMPERATURE = 0.0
+    DEFAULT_REASONING_EFFORT = "low"
 
 # JSON Schema
 # You can add more key in this part, to fit different task.
 class Result(BaseModel):
   response: str
+
+class OllamaOpenAIClient:
+    """Client for Ollama using OpenAI interface"""
+    
+    def __init__(self, host: str = "http://192.168.100.32:11434"):
+        self.host = host.rstrip("/")
+        self.client_type = "ollama_openai"
+        self.client = OpenAI(
+            base_url=f"{self.host}/v1",
+            api_key="local"
+        )
+    
+    def chat(self, model: str, messages: List[Dict[str, str]], options: Dict[str, Any] = None, format: Dict = None) -> Dict:
+        """
+        Send a chat completion request to Ollama using OpenAI interface
+        
+        Args:
+            model: Model name to use
+            messages: List of message dicts with role and content
+            options: Dictionary of options like temperature, max_tokens, reasoning_effort
+            format: Format specification (ignored for Ollama)
+            
+        Returns:
+            Dict with response content
+        """
+        # Default options
+        if options is None:
+            options = {}
+            
+        # Convert options to API parameters
+        api_params = {
+            "model": model,
+            "messages": messages,
+            "temperature": options.get("temperature", RESPONSE_TEMPERATURE),
+            "max_tokens": options.get("max_tokens", RESPONSE_MAX_TOKENS),
+            "top_p": options.get("top_p", 1.0),
+            "stream": False,
+        }
+        
+        # Handle reasoning_effort for GPT-OSS
+        reasoning_effort = options.get("reasoning_effort") or options.get("effort") or DEFAULT_REASONING_EFFORT
+        if reasoning_effort:
+            # Send both shapes to maximize compatibility
+            api_params["extra_body"] = {
+                "reasoning_effort": reasoning_effort,
+                "reasoning": {"effort": reasoning_effort},
+            }
+        
+        # Make API request
+        response = self.client.chat.completions.create(**api_params)
+        
+        # Extract content, falling back to reasoning text if present
+        try:
+            choice = response.choices[0]
+            message = choice.message
+            content = getattr(message, "content", None) or ""
+            reasoning_text = None
+            if hasattr(message, "reasoning") and getattr(message, "reasoning"):
+                reasoning_text = getattr(message, "reasoning")
+            elif hasattr(choice, "reasoning") and getattr(choice, "reasoning"):
+                reasoning_text = getattr(choice, "reasoning")
+            else:
+                try:
+                    dumped = response.model_dump()
+                    reasoning_text = (
+                        dumped.get("choices", [{}])[0].get("message", {}).get("reasoning")
+                        or dumped.get("choices", [{}])[0].get("reasoning")
+                    )
+                except Exception:
+                    reasoning_text = None
+            if not content and reasoning_text:
+                content = reasoning_text
+        except Exception:
+            # As a last resort, stringify the whole response
+            try:
+                content = str(response)
+            except Exception:
+                content = ""
+        
+        return {"message": {"content": content}}
 
 class ProductionAPIClient:
     """Client for the production API server"""
@@ -45,8 +133,8 @@ class ProductionAPIClient:
         api_params = {
             "model": model,  # vLLM will use whatever model is loaded
             "messages": messages,
-            "temperature": options.get("temperature", 0.7),
-            "max_tokens": options.get("max_tokens", 1000),
+            "temperature": options.get("temperature", RESPONSE_TEMPERATURE),
+            "max_tokens": options.get("max_tokens", RESPONSE_MAX_TOKENS),
             "top_p": options.get("top_p", 1.0),
             "stream": False
         }
@@ -75,7 +163,7 @@ class ProductionAPIClient:
 
 # Get response from LLM
 def LLM(
-    client: Union[Client, ProductionAPIClient],
+    client: Union[OllamaOpenAIClient, ProductionAPIClient],
     model: str,
     system_prompt: str,
     user_prompt: str,
@@ -85,12 +173,26 @@ def LLM(
     raw: bool = False
 ) -> str:
     opts = {} if options is None else options.copy()
-    # By default deterministic:
+    # Default deterministic, fast, and bounded
     if not opts and not raw:
-        opts = {"seed": 42, "temperature": 0}
-    # If raw=True and no opts, we default to creative
+        opts = {"seed": 42, "temperature": RESPONSE_TEMPERATURE, "max_tokens": RESPONSE_MAX_TOKENS, "reasoning_effort": DEFAULT_REASONING_EFFORT}
+    # If raw=True and no opts, default to concise creative
     if raw and not opts:
-        opts = {"temperature": 0.4}
+        opts = {"temperature": max(0.2, RESPONSE_TEMPERATURE), "max_tokens": RESPONSE_MAX_TOKENS, "reasoning_effort": DEFAULT_REASONING_EFFORT}
+
+    # Normalize options to ensure expected keys are present
+    # Map num_predict -> max_tokens if provided by caller
+    if "max_tokens" not in opts and "num_predict" in opts:
+        try:
+            opts["max_tokens"] = int(opts.get("num_predict"))
+        except Exception:
+            pass
+    # Ensure temperature is set
+    if "temperature" not in opts:
+        opts["temperature"] = RESPONSE_TEMPERATURE
+    # Ensure reasoning_effort is propagated for GPT-OSS
+    if "reasoning_effort" not in opts and "effort" not in opts:
+        opts["reasoning_effort"] = DEFAULT_REASONING_EFFORT
 
     messages = [
         {"role": "system", "content": system_prompt},
@@ -173,19 +275,23 @@ def extract_json(response: str):
             # For other non-JSON responses, return as error
             return json.dumps({"Error": f"'{response}' is not a valid JSON"})
 
-def get_client(client_type: str = "ollama", host: str = None) -> Union[Client, ProductionAPIClient]:
+def get_client(client_type: str = "ollama_openai", host: str = None) -> Union[OllamaOpenAIClient, ProductionAPIClient]:
     """
     Get the appropriate client based on type
     
     Args:
-        client_type: "ollama" or "production"
+        client_type: "ollama_openai" (default), "ollama", or "production"
         host: Host URL or environment variable name
         
     Returns:
         Client instance
     """
-    if client_type.lower() == "ollama":
-        # For Ollama client, host can be an env var name
+    if client_type.lower() == "ollama_openai":
+        # For Ollama using OpenAI interface
+        host_url = host or "http://192.168.100.32:11434"
+        return OllamaOpenAIClient(host=host_url)
+    elif client_type.lower() == "ollama":
+        # Legacy Ollama client (for backward compatibility)
         if host and host.startswith("M416_"):
             host_url = os.getenv(host)
             if not host_url:
@@ -200,7 +306,7 @@ def get_client(client_type: str = "ollama", host: str = None) -> Union[Client, P
     else:
         raise ValueError(f"Unknown client type: {client_type}")
 
-def main(client_type: str = "ollama", host: str = None, model: str = "llama3.1:8b-instruct-fp16"):
+def main(client_type: str = "ollama_openai", host: str = None, model: str = "gpt-oss:20b"):
     data = pd.read_csv("demo.csv")
     num_files = len(data)
     result = []
@@ -235,10 +341,11 @@ def main(client_type: str = "ollama", host: str = None, model: str = "llama3.1:8
 if __name__ == "__main__":
     # Change client type, host and model here
     # Options:
-    # 1. Ollama: client_type="ollama", host="M416_3090" (env var) or direct URL
-    # 2. Production: client_type="production", host="http://localhost:8000"
-    client_type = "production"  # or "production"
-    host = "http://localhost:8000"  # or "http://localhost:8000" for production
-    model = "meta-llama-3.2-11b-vision"  # for ollama, or "meta-llama-3.2-11b-vision" for production
+    # 1. Ollama OpenAI: client_type="ollama_openai", host="http://192.168.100.32:11434" (default)
+    # 2. Legacy Ollama: client_type="ollama", host="M416_3090" (env var) or direct URL
+    # 3. Production: client_type="production", host="http://localhost:8000"
+    client_type = "ollama_openai"  # Default to OpenAI interface
+    host = "http://192.168.100.32:11434"  # Remote server
+    model = "gpt-oss:20b"  # Default model
     
     main(client_type, host, model)

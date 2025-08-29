@@ -8,9 +8,13 @@ from rapidfuzz import fuzz, process
 from .node_builder import paragraphs_to_nodes, table_to_nodes, clean_text_for_comparison
 
 # Import table processing components
-from .table_to_image_camelot import extract_tables_to_images
-from .table_extractor import extract_tables_from_image
-from .table_summarizer import summarize_table
+from .table_processing.detector import extract_tables_to_images
+from .table_processing.extractor import extract_tables_from_image
+from .table_processing.summarizer import summarize_table
+from .table_processing.change_html_to_json import parse_html_tables
+from .table_processing.pipeline import TableProcessingPipeline
+from .table_chunker import extract_table_chunks
+from ..config import USE_TABLE_HTML_CHUNKS, RETAIN_TABLE_HTML_FILES
 
 # Import camelot with error handling
 try:
@@ -395,23 +399,48 @@ def deduplicate_content(paragraph_text: str, table_rows: List[str], threshold: f
     return clean_paragraph_text, (table_rows or [])
 
 
-def build_page_nodes(pdf_path: str) -> List[Dict[str, Any]]:
+def build_page_nodes(pdf_path: str, save_prepared: bool = True, doc_id_override: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     Build enhanced nodes from PDF pages including both paragraphs and tables.
     Now includes advanced table processing: table-to-image conversion and JSON extraction.
+    Optionally dumps prepared artifacts to PREPARED_DIR/{doc_id} for later batched processing.
     
     Args:
         pdf_path: Path to PDF file
+        save_prepared: If True, write prepared artifacts to disk for batching
         
     Returns:
         List of nodes ready for indexing
     """
     all_nodes = []
     total_pages = 0
+
+    # Cache check: if prepared nodes already exist for this document, load and return
+    try:
+        from ..config import PREPARED_DIR
+        preferred_doc_id = doc_id_override or os.path.splitext(os.path.basename(pdf_path))[0]
+        base_dir = os.path.join(PREPARED_DIR, preferred_doc_id)
+        nodes_path = os.path.join(base_dir, "nodes_all.json")
+        if os.path.exists(nodes_path):
+            import json
+            print(f"🔍 CACHE HIT: Found existing prepared data for '{preferred_doc_id}'")
+            print(f"   📁 Cache location: {nodes_path}")
+            with open(nodes_path, "r", encoding="utf-8") as f:
+                cached_nodes = json.load(f)
+            print(f"   📊 Loaded {len(cached_nodes)} nodes from cache")
+            print(f"   ⚡ Skipping PDF extraction and table processing")
+            return cached_nodes
+        else:
+            print(f"🔍 CACHE MISS: No prepared data found for '{preferred_doc_id}'")
+            print(f"   📁 Expected location: {nodes_path}")
+            print(f"   🚀 Proceeding with full PDF extraction and processing")
+    except Exception:
+        print(f"⚠️  Cache check failed, proceeding with extraction")
     
     # Step 1: Extract tables to images and get metadata
     print("🔄 Step 1: Extracting tables to images...")
-    table_images = extract_tables_to_images(pdf_path, output_dir="data/temp_tables")
+    preferred_doc_id = doc_id_override or os.path.splitext(os.path.basename(pdf_path))[0]
+    table_images = extract_tables_to_images(pdf_path, output_dir="data/temp_tables", base_name=preferred_doc_id)
     
     if table_images:
         print(f"📊 Found {len(table_images)} tables to process")
@@ -459,7 +488,63 @@ def build_page_nodes(pdf_path: str) -> List[Dict[str, Any]]:
     
     pages = extract_text_pages(pdf_path, skip_regions_pdf_by_page=skip_regions_pdf_by_page)
     total_pages = max(total_pages, len(pages))
-    
+
+    # Run new two-phase table pipeline once for the whole PDF
+    try:
+        pipeline = TableProcessingPipeline(output_dir="data/temp_tables")
+        doc_id = preferred_doc_id
+        # Use pre-extracted table images to avoid duplicate extraction
+        tp_result = pipeline.process_pdf_with_tables(pdf_path, table_images, doc_id=doc_id)
+        table_nodes_new = tp_result.nodes_generated or []
+        all_nodes.extend(table_nodes_new)
+        print(f"   📊 Added {len(table_nodes_new)} table nodes via pipeline")
+
+        # Optional: generate table HTML chunk nodes using pipeline raw output
+        if USE_TABLE_HTML_CHUNKS:
+            try:
+                raw = (tp_result.metadata or {}).get("raw_extracted", {}) or {}
+                timgs = (tp_result.metadata or {}).get("table_images", []) or []
+                id_to_page = {str(info.get("table_id")): info.get("page") for info in timgs if isinstance(info, dict)}
+                for tid, payload in raw.items():
+                    html_text = ""
+                    if isinstance(payload, dict):
+                        html_text = payload.get("text") or payload.get("html") or ""
+                    else:
+                        html_text = str(payload)
+                    if not html_text or not str(html_text).strip():
+                        continue
+                    page_num_for_tid = id_to_page.get(str(tid), 'unknown')
+                    source_id = f"table_{tid}_P{page_num_for_tid}.html"
+                    chunks = extract_table_chunks(
+                        html_text,
+                        source_id=source_id,
+                        max_rows_per_chunk=15,
+                        max_chars=1500,
+                        row_level=False,
+                        include_notes=False,
+                        char_chunk=True,
+                        max_chars_per_chunk=1200,
+                        overlap_chars=150,
+                        char_only_if_long=True,
+                    )
+                    for c in chunks:
+                        all_nodes.append({
+                            "type": "table_chunk",
+                            "page": page_num_for_tid,
+                            "text": c.text,
+                            "metadata": {
+                                **c.meta,
+                                "table_id": tid,
+                                "source_id": c.source_id,
+                                "scope": "table",
+                            },
+                        })
+                print(f"   🧩 Added table_chunk nodes via pipeline")
+            except Exception as e:
+                print(f"   ⚠️  Table HTML chunking (pipeline) failed: {e}")
+    except Exception as e:
+        print(f"   ⚠️  Pipeline table processing failed: {e}")
+
     print(f"🏗️  Building nodes from {total_pages} pages...")
     
     # Step 3: Process each page
@@ -482,28 +567,7 @@ def build_page_nodes(pdf_path: str) -> List[Dict[str, Any]]:
             all_nodes.extend(paragraph_nodes)
             print(f"   📝 Added {len(paragraph_nodes)} paragraph nodes")
         
-        # Process tables for this page
-        for table_info in page_tables:
-            try:
-                # Step 3a: Extract JSON from table image
-                print(f"   🖼️  Processing table {table_info['table_id']} from image...")
-                json_tables = extract_tables_from_image(table_info['image_path'])
-                
-                if json_tables:
-                    # Step 3b: Create table nodes from JSON content
-                    table_nodes = _create_table_nodes_from_json(
-                        page_num, 
-                        table_info['table_id'], 
-                        json_tables
-                    )
-                    all_nodes.extend(table_nodes)
-                    print(f"   📊 Added {len(table_nodes)} table nodes")
-                else:
-                    print(f"   ⚠️  No JSON content extracted from table {table_info['table_id']}")
-                    
-            except Exception as e:
-                print(f"   ❌ Error processing table {table_info['table_id']}: {e}")
-                continue
+        # Table nodes are now added via TableProcessingPipeline; skip per-table processing here
         
         # Clean up temporary table images
         for table_info in page_tables:
@@ -513,14 +577,40 @@ def build_page_nodes(pdf_path: str) -> List[Dict[str, Any]]:
             except Exception as e:
                 print(f"   ⚠️  Could not clean up {table_info['image_path']}: {e}")
     
-    # Clean up temporary directory
+    # Optionally clean up temporary directory (retain by default)
+    if not RETAIN_TABLE_HTML_FILES:
+        try:
+            temp_dir = "data/temp_tables"
+            if os.path.exists(temp_dir):
+                import shutil
+                shutil.rmtree(temp_dir)
+        except Exception as e:
+            print(f"⚠️  Could not clean up temp directory: {e}")
+    
+    # Save prepared artifacts
     try:
-        temp_dir = "data/temp_tables"
-        if os.path.exists(temp_dir):
-            import shutil
-            shutil.rmtree(temp_dir)
+        if save_prepared:
+            from ..config import PREPARED_DIR
+            import json
+            doc_id = preferred_doc_id
+            base_dir = os.path.join(PREPARED_DIR, doc_id)
+            os.makedirs(base_dir, exist_ok=True)
+            # Save pages
+            with open(os.path.join(base_dir, "pages.json"), "w", encoding="utf-8") as f:
+                json.dump(pages, f, ensure_ascii=False)
+            # Save raw extracted tables (if available from pipeline)
+            try:
+                raw = (tp_result.metadata or {}).get("raw_extracted", {}) if 'tp_result' in locals() else {}
+                with open(os.path.join(base_dir, "tables_raw.json"), "w", encoding="utf-8") as f:
+                    json.dump(raw, f, ensure_ascii=False)
+            except Exception:
+                pass
+            # Save all nodes
+            with open(os.path.join(base_dir, "nodes_all.json"), "w", encoding="utf-8") as f:
+                json.dump(all_nodes, f, ensure_ascii=False)
+            print(f"💾 Prepared artifacts saved to {base_dir}")
     except Exception as e:
-        print(f"⚠️  Could not clean up temp directory: {e}")
+        print(f"⚠️  Failed to save prepared artifacts: {e}")
     
     print(f"✅ Built {len(all_nodes)} total nodes")
     return all_nodes
@@ -658,17 +748,33 @@ def _create_table_nodes_from_json(page_num: int, table_id: int, json_tables: Lis
         
         # Create table record nodes
         for record_idx, record in enumerate(records):
-            if record.get('__note__'):
-                # Skip note records for now (they're handled separately)
-                continue
+            # Handle both dict and list records
+            if isinstance(record, dict):
+                if record.get('__note__'):
+                    # Skip note records for now (they're handled separately)
+                    continue
+                    
+                # Create a structured text representation
+                record_parts = []
+                for header, value in record.items():
+                    if header != '__note__':
+                        record_parts.append(f"{header}: {value}")
                 
-            # Create a structured text representation
-            record_parts = []
-            for header, value in record.items():
-                if header != '__note__':
-                    record_parts.append(f"{header}: {value}")
-            
-            record_text = " | ".join(record_parts)
+                record_text = " | ".join(record_parts)
+            elif isinstance(record, list):
+                # Convert list to structured text
+                record_parts = []
+                for j, value in enumerate(record):
+                    if j < len(headers):
+                        header = headers[j]
+                        record_parts.append(f"{header}: {value}")
+                    else:
+                        record_parts.append(f"欄位{j+1}: {value}")
+                
+                record_text = " | ".join(record_parts)
+            else:
+                # Skip unknown record types
+                continue
             
             table_nodes.append({
                 "type": "table_record",
@@ -687,10 +793,23 @@ def _create_table_nodes_from_json(page_num: int, table_id: int, json_tables: Lis
             # Collect all values for this column
             column_values = []
             for record in records:
-                if not record.get('__note__') and header in record:
-                    value = record[header]
-                    if value and str(value).strip():
-                        column_values.append(str(value))
+                # Handle both dict and list records
+                if isinstance(record, dict):
+                    if not record.get('__note__') and header in record:
+                        value = record[header]
+                        if value and str(value).strip():
+                            column_values.append(str(value))
+                elif isinstance(record, list):
+                    # Find the column index for this header
+                    try:
+                        col_idx = headers.index(header)
+                        if col_idx < len(record):
+                            value = record[col_idx]
+                            if value and str(value).strip():
+                                column_values.append(str(value))
+                    except ValueError:
+                        # Header not found in headers list
+                        continue
             
             if column_values:
                 column_text = f"Column '{header}': {', '.join(column_values[:10])}{'...' if len(column_values) > 10 else ''}"
@@ -719,58 +838,3 @@ def _create_table_nodes_from_json(page_num: int, table_id: int, json_tables: Lis
                 })
     
     return table_nodes
-
-
-
-
-
-
-if __name__ == "__main__":
-    data = ingest_pdf("data/raw/2024_03_14法人說明會簡報.pdf")
-    print(f"Extracted {len(data['pages'])} pages and {len(data['images'])} images")
-    # Display image information grouped by page
-    print("\n=== Image Distribution by Page ===")
-    
-    # Create page to images mapping
-    page_images = {}
-    for img in data['images']:
-        page_num = img['page']
-        if page_num not in page_images:
-            page_images[page_num] = []
-        page_images[page_num].append(img)
-    
-    # Display by page order
-    for page_num in sorted(page_images.keys()):
-        images = page_images[page_num]
-        print(f"\nPage {page_num} - {len(images)} image(s):")
-        
-        for i, img in enumerate(images, 1):
-            print(f"  Image {i}:")
-            print(f"    BBox: {img['bbox']}")
-            print(f"    Format: {img['ext']}")
-            print(f"    Size: {len(img['img_bytes'])} bytes")
-            if img['file_path']:
-                print(f"    Saved to: {img['file_path']}")
-            else:
-                print(f"    Saved to: Not saved")
-    
-    # Show pages without images
-    all_pages = set(range(1, len(data['pages']) + 1))
-    pages_with_images = set(page_images.keys())
-    pages_without_images = all_pages - pages_with_images
-    
-    if pages_without_images:
-        print(f"\nPages without images: {sorted(pages_without_images)}")
-    
-    # Statistics summary
-    print(f"\n=== Summary Statistics ===")
-    print(f"Total pages: {len(data['pages'])}")
-    print(f"Pages with images: {len(pages_with_images)}")
-    print(f"Pages without images: {len(pages_without_images)}")
-    print(f"Total images: {len(data['images'])}")
-    
-    # Image distribution per page
-    if page_images:
-        print(f"Average images per page: {len(data['images']) / len(pages_with_images):.1f}")
-        max_images_page = max(page_images.keys(), key=lambda x: len(page_images[x]))
-        print(f"Page with most images: Page {max_images_page} ({len(page_images[max_images_page])} images)")

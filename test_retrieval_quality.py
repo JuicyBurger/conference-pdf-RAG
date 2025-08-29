@@ -39,7 +39,7 @@ questions = [
 # API Configuration
 API_BASE_URL = "http://127.0.0.1:5000"  # Adjust if your API runs on different port
 CHAT_ENDPOINT = f"{API_BASE_URL}/api/chat/message"
-STATUS_ENDPOINT = f"{API_BASE_URL}/health"
+STATUS_ENDPOINTS = [f"{API_BASE_URL}/health", f"{API_BASE_URL}/api/status/health"]
 
 class RetrievalTester:
     def __init__(self):
@@ -49,26 +49,28 @@ class RetrievalTester:
         self.total_api_time = 0.0  # Track total time spent on API calls
         
     def check_api_status(self) -> bool:
-        """Check if the API is running."""
-        try:
-            response = requests.get(STATUS_ENDPOINT, timeout=5)
-            return response.status_code == 200
-        except Exception as e:
-            print(f"❌ API not accessible: {e}")
-            return False
+        """Check if the API is running (try multiple health endpoints)."""
+        for url in STATUS_ENDPOINTS:
+            try:
+                response = requests.get(url, timeout=5)
+                if response.status_code == 200:
+                    return True
+            except Exception:
+                continue
+        return False
     
-    def send_question(self, question: str, room_id: str = "303cc9de-6933-4651-b392-32d2a6dae88d") -> Dict[str, Any]:
-        """Send a question to the chat API and get response."""
+    def send_question(self, question: str, room_id: str | None = None) -> Dict[str, Any]:
+        """Send a question to the chat API and get response (auto-create room when room_id=None)."""
         payload = {
             "content": question,
             "user_id": "test_script",
             "room_id": room_id,
-            "stream": False
+            # chat route auto-creates room when None; no streaming in this test
         }
         
         try:
             api_start_time = time.time()  # Start timing API call
-            response = requests.post(CHAT_ENDPOINT, json=payload, timeout=60)
+            response = requests.post(CHAT_ENDPOINT, json=payload, timeout=180)
             api_end_time = time.time()  # End timing API call
             api_call_time = api_end_time - api_start_time
             self.total_api_time += api_call_time  # Accumulate API time
@@ -163,8 +165,8 @@ class RetrievalTester:
         """Run a single test question."""
         print(f"\n🔍 Testing Question {question_id} ({difficulty}): {question}")
         
-        # Send question to API
-        response_data = self.send_question(question)
+        # Send question to API (auto-create room)
+        response_data = self.send_question(question, room_id=None)
         
         # Extract API call time
         api_call_time = response_data.get('api_call_time', 0.0)

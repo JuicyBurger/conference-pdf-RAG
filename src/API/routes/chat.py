@@ -126,7 +126,7 @@ def send_message():
             pdf_file = None  # No file in JSON mode
         
         # Ensure room exists using room service
-        room_id, is_new_room = run_async(room_service.ensure_room_exists(room_id, content, user_id))
+        room_id, _ = run_async(room_service.ensure_room_exists(room_id, content, user_id))
         
         # Process PDF file if provided using room service
         uploaded_files = []
@@ -156,10 +156,17 @@ def send_message():
                     (_constraints.get('doc_ids') and len(_constraints['doc_ids']) > 0) or
                     (_constraints.get('pages') and len(_constraints['pages']) > 0)
                 )
-                # 2b. Rewrite query using chat history for better retrieval
-                from src.rag.llm_query_rewriter import PromptRewriterLLM
-                rewriter = PromptRewriterLLM()
-                rewritten_query = rewriter.rewrite(content, chat_history)
+                # 2b. Rewrite query using chat history for better retrieval (optional)
+                try:
+                    from src.config import RAG_DISABLE_QUERY_REWRITER
+                except Exception:
+                    RAG_DISABLE_QUERY_REWRITER = True
+                if not RAG_DISABLE_QUERY_REWRITER:
+                    from src.rag.utils import PromptRewriterLLM
+                    rewriter = PromptRewriterLLM()
+                    rewritten_query = rewriter.rewrite(content, chat_history)
+                else:
+                    rewritten_query = content
                 logger.info(f"🔄 Original query: '{content}'")
                 logger.info(f"🔄 Rewritten query: '{rewritten_query}'")
             

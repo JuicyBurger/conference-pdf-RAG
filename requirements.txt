@@ -4,10 +4,13 @@ jieba
 sentence-transformers
 qdrant-client>=1.6.4
 ollama
+httpx
 python-dotenv
 pandas
 torch
 transformers
+rank-bm25
+beautifulsoup4
 camelot-py[cv]
 rapidfuzz>=3.0.0
 PyMuPDF

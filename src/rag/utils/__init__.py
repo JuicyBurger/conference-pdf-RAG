@@ -1,13 +1,18 @@
 """
-Utility functions for RAG components.
+Consolidated utility functions for RAG components.
 
-This module provides shared utilities for logging, error handling, and other
-common functionality across the RAG system.
+This module provides all RAG utilities in one place:
+- Error types and handling
+- Logging utilities  
+- Query parsing and rewriting
 """
 
-from .logging_utils import setup_logger, log_execution
-from .error_utils import handle_errors
-from ..errors import (
+# Core utilities
+from .logging import setup_logger
+from .error_handling import handle_errors
+
+# Error types
+from .errors import (
     RAGError, 
     EmbeddingError, 
     RetrievalError, 
@@ -17,10 +22,13 @@ from ..errors import (
     GraphError
 )
 
+# Query processing utilities
+from .query_parsing import QueryParser, parse_query
+from .query_rewriting import PromptRewriterLLM
+
 __all__ = [
     # Logging utilities
     "setup_logger",
-    "log_execution",
     
     # Error handling utilities
     "handle_errors",
@@ -32,5 +40,10 @@ __all__ = [
     "GenerationError",
     "DatabaseError",
     "ConfigurationError",
-    "GraphError"
+    "GraphError",
+    
+    # Query processing
+    "QueryParser",
+    "parse_query", 
+    "PromptRewriterLLM"
 ]

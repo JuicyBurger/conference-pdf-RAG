@@ -10,6 +10,13 @@ from __future__ import annotations
 from typing import List, Dict, Any, Optional, Union, Set
 import logging
 from dataclasses import dataclass, field
+import math
+
+# New: BM25 + cross-encoder rerank imports
+import jieba
+from rank_bm25 import BM25Okapi
+import torch
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
 from ..utils import handle_errors, RetrievalError, DatabaseError, setup_logger
 
@@ -97,10 +104,14 @@ class RetrievalService:
         self.collection = QDRANT_COLLECTION
         
         # Initialize query parser
-        from src.rag.query_parser import QueryParser
+        from ..utils import QueryParser
         self._query_parser = None
         
         logger.info("Initialized retrieval service dependencies")
+
+        # Initialize cross-encoder placeholders (lazy load on first use)
+        self._ce_tokenizer = None
+        self._ce_model = None
     
     def _log_hits(self, prefix: str, hits: list, limit: int = 5):
         """Log a compact list of hits with score, doc_id, page, and id."""
@@ -132,7 +143,7 @@ class RetrievalService:
             doc_ids = self.get_all_doc_ids()
             if doc_ids:
                 # Initialize the query parser with all doc IDs
-                from src.rag.query_parser import QueryParser
+                from ..utils import QueryParser
                 self._query_parser = QueryParser(doc_ids)
                 logger.info(f"✅ Bootstrapped jieba with {len(doc_ids)} document IDs from Qdrant")
                 return True
@@ -147,7 +158,7 @@ class RetrievalService:
         """Get or create the query parser instance with known doc IDs."""
         if self._query_parser is None:
             # Get all unique document IDs from Qdrant for fuzzy matching
-            from src.rag.query_parser import QueryParser
+            from ..utils import QueryParser
             known_doc_ids = self.get_all_doc_ids()
             self._query_parser = QueryParser(known_doc_ids)
         return self._query_parser
@@ -303,21 +314,223 @@ class RetrievalService:
                     request.top_k
                 )
             
-            # Merge and deduplicate results
-            final_hits = self._merge_and_deduplicate(
+            # Compute BM25 over candidate pool (dense + keyword + scroll)
+            candidate_pool = []
+            seen_ids = set()
+            for lst in (dense_hits or []), (keyword_hits or []), (scroll_hits or []):
+                for h in lst:
+                    hid = getattr(h, 'id', None)
+                    if hid is None or hid in seen_ids:
+                        continue
+                    candidate_pool.append(h)
+                    seen_ids.add(hid)
+
+            bm25_scores = self._bm25_scores(search_query, candidate_pool) if candidate_pool else {}
+
+            # Merge and deduplicate over a larger pool, then fuse and cut to top_k
+            pool_limit = max(len(candidate_pool), request.top_k * 5 or 50)
+            baseline_pool = self._merge_and_deduplicate(
                 dense_hits,
                 keyword_hits,
                 scroll_hits,
-                request.top_k,
+                pool_limit,
                 request.score_threshold,
                 constraints.get('content_types', [])
             )
+
+            # RRF reordering using ranks from dense/keyword and BM25 ranks, then trim
+            rrf_rank_map = self._rrf_scores(dense_hits, keyword_hits, bm25_scores)
+            if rrf_rank_map and baseline_pool:
+                baseline_pool.sort(key=lambda h: rrf_rank_map.get(getattr(h, 'id', None), -math.inf), reverse=True)
+            final_hits = baseline_pool[: request.top_k]
+
+            # Optional: For table queries, expand to include all row hits for selected tables
+            is_table_query = any(ct in ['table_row', 'table_summary'] for ct in constraints.get('content_types', []))
+            has_table_like_hit = any(((getattr(h, 'payload', {}) or {}).get('type') in ['table_chunk', 'table', 'row'] or (getattr(h, 'payload', {}) or {}).get('level') in ['table', 'row']) for h in final_hits)
+            if (is_table_query or has_table_like_hit) and final_hits:
+                try:
+                    final_hits = self._expand_table_rows(final_hits, max_rows=200)
+                except Exception as e:
+                    logger.warning(f"Failed to expand table rows: {e}")
+
+            # Cross-encoder rerank the final list for precision
+            try:
+                final_hits = self._cross_encoder_rerank(search_query, final_hits, top_n=len(final_hits))
+            except Exception as e:
+                logger.warning(f"Cross-encoder rerank skipped due to error: {e}")
             
             # Convert to standard format
             return [RetrievalResult.from_qdrant_hit(hit) for hit in final_hits]
         except Exception as e:
             logger.error(f"Retrieval error: {e}")
             return []
+
+    def _bm25_scores(self, query: str, hits: List[Any]) -> Dict[Any, float]:
+        """Compute BM25 scores over a candidate pool of hits.
+
+        Returns mapping: hit.id -> bm25 score
+        """
+        try:
+            docs = []
+            ids = []
+            for h in hits:
+                payload = getattr(h, 'payload', {}) or {}
+                text = payload.get('text') or payload.get('content') or ''
+                ids.append(getattr(h, 'id', None))
+                docs.append(list(jieba.cut(text)))
+            if not docs:
+                return {}
+            bm25 = BM25Okapi(docs)
+            q_tokens = list(jieba.cut(query))
+            scores = bm25.get_scores(q_tokens)
+            return {hid: float(sc) for hid, sc in zip(ids, scores) if hid is not None}
+        except Exception as e:
+            logger.debug(f"BM25 scoring failed: {e}")
+            return {}
+
+    def _rrf_scores(self, dense_hits: List[Any], keyword_hits: List[Any], bm25_scores: Dict[Any, float], k: int = 60) -> Dict[Any, float]:
+        """Compute Reciprocal Rank Fusion scores from dense, keyword, and BM25.
+
+        Returns mapping: hit.id -> rrf score (higher is better)
+        """
+        try:
+            id_to_rrf: Dict[Any, float] = {}
+
+            def add_rank_contrib(lst: List[Any]):
+                if not lst:
+                    return
+                # Sort by score descending
+                ordered = sorted(lst, key=lambda h: getattr(h, 'score', 0.0), reverse=True)
+                for idx, h in enumerate(ordered, start=1):
+                    hid = getattr(h, 'id', None)
+                    if hid is None:
+                        continue
+                    id_to_rrf[hid] = id_to_rrf.get(hid, 0.0) + 1.0 / (k + idx)
+
+            add_rank_contrib(dense_hits or [])
+            add_rank_contrib(keyword_hits or [])
+
+            # BM25 by rank
+            if bm25_scores:
+                ordered_bm25 = sorted(bm25_scores.items(), key=lambda x: x[1], reverse=True)
+                for idx, (hid, _) in enumerate(ordered_bm25, start=1):
+                    id_to_rrf[hid] = id_to_rrf.get(hid, 0.0) + 1.0 / (k + idx)
+
+            return id_to_rrf
+        except Exception as e:
+            logger.debug(f"RRF scoring failed: {e}")
+            return {}
+
+    def _cross_encoder_rerank(self, query: str, hits: List[Any], top_n: int = 50) -> List[Any]:
+        """Cross-encoder rerank of hits using a HF model.
+
+        Returns hits reordered by cross-encoder scores; preserves original hit objects.
+        """
+        if not hits:
+            return hits
+
+        try:
+            if self._ce_model is None or self._ce_tokenizer is None:
+                model_name = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+                self._ce_tokenizer = AutoTokenizer.from_pretrained(model_name)
+                self._ce_model = AutoModelForSequenceClassification.from_pretrained(model_name)
+                device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+                self._ce_model.to(device)
+                self._ce_model.eval()
+
+            # Prepare pairs
+            pairs = []
+            idx_map = []
+            for i, h in enumerate(hits[:top_n]):
+                payload = getattr(h, 'payload', {}) or {}
+                text = payload.get('text') or payload.get('content')
+                if not text:
+                    continue
+                pairs.append((query, text))
+                idx_map.append(i)
+
+            if not pairs:
+                return hits
+
+            device = next(self._ce_model.parameters()).device
+            enc = self._ce_tokenizer(
+                [q for q, _ in pairs],
+                [t for _, t in pairs],
+                padding=True,
+                truncation=True,
+                max_length=512,
+                return_tensors="pt",
+            ).to(device)
+
+            with torch.no_grad():
+                logits = self._ce_model(**enc).logits.squeeze(-1).detach().float().cpu().tolist()
+
+            scored = list(zip(idx_map, logits))
+            scored.sort(key=lambda x: x[1], reverse=True)
+
+            # Reorder hits: top_n by CE score first, then the rest in original order
+            ordered_indices = [i for i, _ in scored]
+            seen = set(ordered_indices)
+            tail = [i for i in range(len(hits)) if i not in seen]
+            new_order = ordered_indices + tail
+            return [hits[i] for i in new_order]
+        except Exception as e:
+            logger.debug(f"Cross-encoder rerank failed: {e}")
+            return hits
+
+    def _expand_table_rows(self, hits: List[Any], max_rows: int = 200) -> List[Any]:
+        """Given selected hits, if any correspond to table embeddings, fetch additional row-level hits
+        from the same table to allow whole-table reconstruction.
+
+        Args:
+            hits: Current list of Qdrant hits
+            max_rows: Maximum number of row-level points to fetch per table
+
+        Returns:
+            Extended list of hits with row-level entries appended (deduped by id)
+        """
+        from qdrant_client.http.models import Filter, FieldCondition, MatchValue
+
+        # Collect unique (doc_id, table_id) pairs from table hits
+        tables: set[tuple[str, str]] = set()
+        for h in hits:
+            payload = getattr(h, 'payload', {}) or {}
+            level = payload.get('level') or payload.get('type')
+            if level in ['table', 'row'] or ('table_id' in payload):
+                doc_id = payload.get('doc_id')
+                table_id = payload.get('table_id')
+                if doc_id and table_id:
+                    tables.add((doc_id, table_id))
+
+        if not tables:
+            return hits
+
+        existing_ids = {getattr(h, 'id', None) for h in hits}
+        extended: List[Any] = list(hits)
+
+        for doc_id, table_id in tables:
+            try:
+                flt = Filter(must=[
+                    FieldCondition(key='doc_id', match=MatchValue(value=doc_id)),
+                    FieldCondition(key='table_id', match=MatchValue(value=table_id)),
+                    FieldCondition(key='level', match=MatchValue(value='row')),
+                ])
+                points, _ = self.client.scroll(
+                    collection_name=self.collection,
+                    scroll_filter=flt,
+                    with_payload=True,
+                    with_vectors=False,
+                    limit=max_rows,
+                )
+                for p in points or []:
+                    pid = getattr(p, 'id', None)
+                    if pid and pid not in existing_ids:
+                        extended.append(p)
+                        existing_ids.add(pid)
+            except Exception as e:
+                logger.debug(f"Table rows expansion failed for {doc_id}#{table_id}: {e}")
+
+        return extended
     
     def _build_filters(self, request: RetrievalRequest, constraints: Dict[str, Any]) -> Dict[str, Any]:
         """Build filters from request and constraints.
@@ -405,12 +618,14 @@ class RetrievalService:
         Returns:
             List of Qdrant hits
         """
-        # Increase limit for table queries to get more comprehensive results
+        # Increase limit and seed count to allow richer expansion
         is_table_query = any(ct in ['table_row', 'table_summary'] for ct in constraints.get('content_types', []))
+        base_multiplier = 6  # previously 3
+        table_multiplier = 8
         if is_table_query:
-            initial_limit = min(max(top_k * 5, 20), 100)  # Higher limit for table queries
+            initial_limit = min(max(top_k * table_multiplier, 24), 120)
         else:
-            initial_limit = min(max(top_k * 3, 10), 50)  # Standard limit for other queries
+            initial_limit = min(max(top_k * base_multiplier, 18), 80)
         
         # Check if we have doc_id constraints
         doc_id_constraints_applied = bool(constraints.get('doc_ids'))
@@ -521,18 +736,41 @@ class RetrievalService:
             # Create dummy vector for keyword search using actual embedding dimension
             dummy_vector = [0.0] * len(self.embed("test"))
             
-            response = self.client.query_points(
-                collection_name=self.collection,
-                query=dummy_vector,
-                query_filter=Filter(must=keyword_must),
-                limit=top_k * 3,
-            )
-            keyword_hits = response.points if hasattr(response, 'points') else []
-            self._log_hits("Keyword", keyword_hits)
+            try:
+                response = self.client.query_points(
+                    collection_name=self.collection,
+                    query=dummy_vector,
+                    query_filter=Filter(must=keyword_must),
+                    limit=top_k * 3,
+                )
+                keyword_hits = response.points if hasattr(response, 'points') else []
+                self._log_hits("Keyword", keyword_hits)
+            except Exception as qe:
+                # Attempt to auto-create text index and retry once
+                logger.warning(f"Keyword search failed (attempting to create text index): {qe}")
+                try:
+                    from qdrant_client.http.models import PayloadSchemaType
+                    self.client.create_payload_index(
+                        collection_name=self.collection,
+                        field_name="text",
+                        field_schema=PayloadSchemaType.TEXT,
+                    )
+                    # Retry once after creating the index
+                    response = self.client.query_points(
+                        collection_name=self.collection,
+                        query=dummy_vector,
+                        query_filter=Filter(must=keyword_must),
+                        limit=top_k * 3,
+                    )
+                    keyword_hits = response.points if hasattr(response, 'points') else []
+                    self._log_hits("Keyword", keyword_hits)
+                except Exception as ce:
+                    logger.warning(f"Keyword search failed after index creation attempt: {ce}")
+                    keyword_hits = []
         except Exception as e:
             logger.warning(f"Keyword search failed (text index missing?): {e}")
             keyword_hits = []
-        
+            
         return keyword_hits
     
     def _fallback_search(self, doc_ids, top_k):
@@ -619,6 +857,16 @@ class RetrievalService:
                 if type_key in seen_sources:
                     continue
                 seen_sources.add(type_key)
+
+                # If we added any row hit, force-include one matching table summary (whole-table context)
+                if level == 'row':
+                    summary_key = f"{key}:table"
+                    if summary_key not in seen_sources:
+                        for cand in sorted(all_hits.values(), key=lambda x: x.score, reverse=True):
+                            if cand.payload.get('doc_id') == doc_id and cand.payload.get('page') == page and cand.payload.get('table_id') == table_id and cand.payload.get('level') == 'table':
+                                final.append(cand)
+                                seen_sources.add(summary_key)
+                                break
             else:
                 # Standard deduplication for non-table queries
                 key = f"{doc_id}:{page}"

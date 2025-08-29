@@ -15,7 +15,7 @@ from .base import BaseRAGEngine
 from .models import RetrievalRequest, RetrievalResponse, AnswerRequest, AnswerResponse, Evidence
 from .vector import VectorRAGEngine
 from .graph import GraphRAGEngine
-from ..qa_generation import generate_answer
+from ..generation import generate_answer
 
 # Configure logging
 logger = logging.getLogger(__name__)

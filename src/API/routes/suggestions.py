@@ -12,8 +12,8 @@ import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from src.API.utils.response import success_response, error_response
-from src.rag.suggestions import retrieve_suggestions, retrieve_random_suggestions, get_all_doc_ids_with_suggestions
-from src.rag.suggestions.generator import generate_suggestions_for_doc, batch_generate_suggestions
+from src.rag.generation import retrieve_suggestions, retrieve_random_suggestions, get_all_doc_ids_with_suggestions
+from src.rag.generation import generate_suggestions_for_doc, batch_generate_suggestions
 from src.API.services.chat_service import chat_service
 
 logger = logging.getLogger(__name__)

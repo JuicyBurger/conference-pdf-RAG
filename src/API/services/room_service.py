@@ -13,7 +13,8 @@ from werkzeug.datastructures import FileStorage
 
 from .chat_service import chat_service
 from ..utils.file_handler import validate_pdf_file, validate_file_size, FileValidationError
-from src.rag.indexing.indexer import index_pdf
+from src.indexing import index_nodes_vector
+from src.data.pdf_ingestor import build_page_nodes
 from src.config import QDRANT_COLLECTION
 from src.data.pdf_summarizer import summarize_pdf_content, extract_pdf_text_for_chat
 
@@ -182,7 +183,9 @@ class RoomService:
         # Index PDF into Qdrant with room scoping for local RAG
         try:
             extra_payload = {"room_id": room_id, "scope": "chat"}
-            _ = index_pdf(temp_path, collection_name=QDRANT_COLLECTION, doc_id=os.path.splitext(filename)[0], extra_payload=extra_payload)
+            nodes = build_page_nodes(temp_path)
+            doc_id = os.path.splitext(filename)[0]
+            result = index_nodes_vector(nodes, doc_id, QDRANT_COLLECTION, extra_payload)
             logger.info("✅ Indexed uploaded PDF into room-scoped Qdrant collection")
         except Exception as idx_err:
             logger.warning(f"⚠️ Failed to index uploaded PDF into Qdrant: {idx_err}")

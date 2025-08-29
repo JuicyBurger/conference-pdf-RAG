@@ -15,13 +15,32 @@ def split_sentences_zh(text: str) -> List[str]:
     parts = ZH_BOUNDARY.split(text)
     return [p.strip() for p in parts if p.strip()]
 
-def chunk_text(text: str) -> List[str]:
+def chunk_text(text: str, content_type: str = "general") -> List[str]:
     """
-    Return list of Chinese text chunks.
+    Return list of Chinese text chunks with adaptive sizing.
     Each chunk contains up to CHUNK_MAX_CHARS tokens.
     Uses overlap of CHUNK_OVERLAP tokens between chunks.
+    
+    Args:
+        text: Text to chunk
+        content_type: Type of content ("financial", "table", "general")
     """
     chunks: List[str] = []
+    
+    # Adaptive chunk sizes based on content type
+    if content_type == "financial":
+        # Financial documents need larger chunks for context
+        max_chars = int(CHUNK_MAX_CHARS * 1.5)
+        overlap = int(CHUNK_OVERLAP * 1.5)
+    elif content_type == "table":
+        # Tables can use smaller chunks since they're structured; use same base size for consistency
+        max_chars = CHUNK_MAX_CHARS
+        overlap = CHUNK_OVERLAP
+    else:
+        # General content uses default settings
+        max_chars = CHUNK_MAX_CHARS             # 3000 chars
+        overlap = CHUNK_OVERLAP                 # 200 chars
+    
     # Coarse paragraphs/pages
     segments = re.split(r'\n\s*\n', text)
 
@@ -36,16 +55,19 @@ def chunk_text(text: str) -> List[str]:
         for sent in sentences:
             toks = jieba.lcut(sent)
             # if adding this sentence would exceed limit, flush
-            if len(buf_tokens) + len(toks) > CHUNK_MAX_CHARS:
+            if len(buf_tokens) + len(toks) > max_chars:
                 # flush current buffer
                 chunk_str = "".join(buf_tokens)
-                chunks.append(chunk_str)
-                # overlap last CHUNK_OVERLAP tokens, then add this sentence
-                buf_tokens = buf_tokens[-CHUNK_OVERLAP:] + toks
+                if chunk_str.strip():  # Only add non-empty chunks
+                    chunks.append(chunk_str)
+                # overlap last overlap tokens, then add this sentence
+                buf_tokens = buf_tokens[-overlap:] + toks
             else:
                 buf_tokens.extend(toks)
         if buf_tokens:
-            chunks.append("".join(buf_tokens))
+            chunk_str = "".join(buf_tokens)
+            if chunk_str.strip():  # Only add non-empty chunks
+                chunks.append(chunk_str)
 
     return chunks
 
